@@ -111,9 +111,15 @@ def run():
 
     print("🤖 Bot lancé (BYBIT MAINNET – LINEAR BTCUSDT)", flush=True)
 
-    # Levier (Linear only)
-    exchange.set_leverage(LEVERAGE, SYMBOL)
-    print(f"🔒 Leverage x{LEVERAGE} activé", flush=True)
+    # 🔒 Set leverage (Bybit peut refuser si déjà réglé)
+    try:
+        exchange.set_leverage(LEVERAGE, SYMBOL)
+        print(f"🔒 Leverage x{LEVERAGE} activé", flush=True)
+    except Exception as e:
+        if "leverage not modified" in str(e):
+            print(f"ℹ️ Leverage déjà à x{LEVERAGE}", flush=True)
+        else:
+            print("⚠️ Erreur set_leverage:", e, flush=True)
 
     while True:
         try:
@@ -126,7 +132,6 @@ def run():
                     "(bot en pause, pas d'arrêt)",
                     flush=True
                 )
-                # Pause longue, mais le process reste vivant
                 time.sleep(3600)
                 continue
 
