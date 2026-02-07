@@ -11,9 +11,8 @@ from config import (
     LEVERAGE,
 )
 
-from strategy import apply_indicators, check_signal
-from risk import calculate_position_size
 from notifier import send_telegram
+from risk import calculate_position_size
 
 # =========================
 # PARAMÈTRES STRATÉGIE
@@ -21,8 +20,8 @@ from notifier import send_telegram
 STOP_LOSS_PCT = 0.006     # 0.6%
 TAKE_PROFIT_PCT = 0.009  # 0.9%
 
-MAX_TRADES_PER_DAY = 10
-MAX_DAILY_LOSS_PCT = 0.20  # 20% du capital
+MAX_TRADES_PER_DAY = 15
+MAX_DAILY_LOSS_PCT = 0.20  # 20%
 
 # =========================
 # ÉTAT GLOBAL
@@ -31,6 +30,40 @@ in_position = False
 trades_today = 0
 daily_loss = 0.0
 current_day = datetime.now(timezone.utc).date()
+
+# =========================
+# INDICATEURS
+# =========================
+def apply_indicators(df):
+    # EMA plus rapides
+    df["ema7"] = df["close"].ewm(span=7, adjust=False).mean()
+    df["ema14"] = df["close"].ewm(span=14, adjust=False).mean()
+
+    # RSI
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -delta.clip(upper=0).rolling(14).mean()
+    rs = gain / loss
+    df["rsi"] = 100 - (100 / (1 + rs))
+
+    return df
+
+
+def check_signal(df):
+    if len(df) < 20:
+        return None
+
+    last = df.iloc[-1]
+
+    # LONG plus permissif
+    if last.ema7 > last.ema14 and 45 <= last.rsi <= 70:
+        return "long"
+
+    # SHORT plus permissif
+    if last.ema7 < last.ema14 and 30 <= last.rsi <= 55:
+        return "short"
+
+    return None
 
 # =========================
 # UTILITAIRES
@@ -48,52 +81,47 @@ def reset_daily_counters():
 
 def fetch_data():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
-    df = pd.DataFrame(
+    return pd.DataFrame(
         ohlcv,
         columns=["time", "open", "high", "low", "close", "volume"]
     )
-    return df
+
+
+def get_safe_position_size(price):
+    balance = exchange.fetch_balance()
+    usdt_free = balance["USDT"]["free"]
+
+    max_position_value = usdt_free * LEVERAGE * 0.9
+    qty = max_position_value / price
+
+    return round(qty, 4)
 
 
 def place_trade(signal, qty, entry_price):
     global in_position, trades_today
 
     side = "buy" if signal == "long" else "sell"
+    exchange.create_market_order(SYMBOL, side, qty)
 
-    # ---- ORDRE MARKET ----
-    exchange.create_market_order(
-        symbol=SYMBOL,
-        side=side,
-        amount=qty
-    )
-
-    # ---- SL / TP ----
     if signal == "long":
-        stop_loss = entry_price * (1 - STOP_LOSS_PCT)
-        take_profit = entry_price * (1 + TAKE_PROFIT_PCT)
+        sl = entry_price * (1 - STOP_LOSS_PCT)
+        tp = entry_price * (1 + TAKE_PROFIT_PCT)
         exit_side = "sell"
     else:
-        stop_loss = entry_price * (1 + STOP_LOSS_PCT)
-        take_profit = entry_price * (1 - TAKE_PROFIT_PCT)
+        sl = entry_price * (1 + STOP_LOSS_PCT)
+        tp = entry_price * (1 - TAKE_PROFIT_PCT)
         exit_side = "buy"
 
-    # Stop Loss
     exchange.create_order(
-        symbol=SYMBOL,
-        type="stop",
-        side=exit_side,
-        amount=qty,
-        price=None,
-        params={"stopPrice": stop_loss}
+        SYMBOL,
+        "stop",
+        exit_side,
+        qty,
+        None,
+        {"stopPrice": sl}
     )
 
-    # Take Profit
-    exchange.create_limit_order(
-        symbol=SYMBOL,
-        side=exit_side,
-        amount=qty,
-        price=take_profit
-    )
+    exchange.create_limit_order(SYMBOL, exit_side, qty, tp)
 
     in_position = True
     trades_today += 1
@@ -103,54 +131,44 @@ def place_trade(signal, qty, entry_price):
         f"Pair: {SYMBOL}\n"
         f"Qty: {qty}\n"
         f"Entry: {round(entry_price,2)}\n"
-        f"SL: {round(stop_loss,2)}\n"
-        f"TP: {round(take_profit,2)}"
+        f"SL: {round(sl,2)}\n"
+        f"TP: {round(tp,2)}"
     )
 
     print(msg, flush=True)
     send_telegram(msg)
 
-
 # =========================
-# MAIN LOOP (24/7 SAFE)
+# MAIN LOOP
 # =========================
 def run():
     global in_position, daily_loss
 
-    print("🤖 Bot lancé (BYBIT MAINNET – LINEAR BTCUSDT)", flush=True)
-    send_telegram("🤖 Bot démarré (Bybit MAINNET – BTCUSDT)")
+    print("🤖 Bot lancé (BYBIT MAINNET – BTCUSDT)", flush=True)
+    send_telegram("🤖 Bot démarré (stratégie assouplie)")
 
-    # 🔒 Set leverage (Bybit peut refuser si déjà réglé)
     try:
         exchange.set_leverage(LEVERAGE, SYMBOL)
-        print(f"🔒 Leverage x{LEVERAGE} activé", flush=True)
     except Exception as e:
         if "leverage not modified" in str(e):
             print(f"ℹ️ Leverage déjà à x{LEVERAGE}", flush=True)
         else:
-            print("⚠️ Erreur set_leverage:", e, flush=True)
             send_telegram(f"⚠️ Erreur set_leverage: {e}")
 
     while True:
         try:
             reset_daily_counters()
 
-            # 🛑 KILL SWITCH (SANS ARRÊT)
             if daily_loss >= CAPITAL * MAX_DAILY_LOSS_PCT:
-                msg = "🛑 KILL SWITCH – perte journalière max atteinte (bot en pause)"
-                print(msg, flush=True)
-                send_telegram(msg)
+                send_telegram("🛑 Kill switch journalier – pause")
                 time.sleep(3600)
                 continue
 
-            # Limite trades journaliers
             if trades_today >= MAX_TRADES_PER_DAY:
-                print("🛑 Max trades journaliers atteint – pause", flush=True)
                 time.sleep(1800)
                 continue
 
-            df = fetch_data()
-            df = apply_indicators(df)
+            df = apply_indicators(fetch_data())
             signal = check_signal(df)
 
             print("⏳ Analyse marché...", flush=True)
@@ -158,29 +176,28 @@ def run():
             if signal and not in_position:
                 price = df.iloc[-1].close
 
-                qty = calculate_position_size(
-                    capital=CAPITAL,
-                    risk_pct=RISK_PER_TRADE,
-                    stop_loss_pct=STOP_LOSS_PCT,
-                    price=price,
-                    leverage=LEVERAGE
+                theoretical_qty = calculate_position_size(
+                    CAPITAL,
+                    RISK_PER_TRADE,
+                    STOP_LOSS_PCT,
+                    price,
+                    LEVERAGE
                 )
+
+                safe_qty = get_safe_position_size(price)
+                qty = min(theoretical_qty, safe_qty)
 
                 if qty > 0:
                     place_trade(signal, qty, price)
-                else:
-                    print("⚠️ Quantité invalide, trade ignoré", flush=True)
 
-            time.sleep(300)  # TF 5 minutes
+            time.sleep(300)
 
         except Exception as e:
-            # ❗ Le bot ne doit JAMAIS s’arrêter
-            print("❌ Erreur attrapée (bot continue):", e, flush=True)
-            send_telegram(f"❌ Erreur bot (non bloquante): {e}")
+            print("❌ Erreur attrapée:", e, flush=True)
+            send_telegram(f"❌ Erreur bot: {e}")
             time.sleep(60)
 
-
 # =========================
-# ENTRY POINT
+# ENTRY
 # =========================
 run()
