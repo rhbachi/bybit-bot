@@ -14,6 +14,7 @@ from config import (
 from strategy import apply_indicators, check_signal
 from risk import calculate_position_size
 from notifier import send_telegram
+from logger import init_logger, log_trade
 
 # =========================
 # PARAMÈTRES STRATÉGIE
@@ -73,6 +74,42 @@ def enforce_min_qty(symbol, qty):
 
 
 # =========================
+# LOGGING CLÔTURE TRADE
+# =========================
+def check_trade_closed():
+    global in_position, daily_loss
+
+    positions = exchange.fetch_positions([SYMBOL])
+    pos = next((p for p in positions if p["symbol"] == SYMBOL), None)
+
+    if in_position and pos and float(pos.get("contracts", 0)) == 0:
+        pnl = float(pos.get("realizedPnl", 0))
+        entry = float(pos.get("entryPrice", 0))
+        exit_price = float(pos.get("markPrice", 0))
+
+        result = "WIN" if pnl > 0 else "LOSS"
+
+        log_trade(
+            symbol=SYMBOL,
+            side=result,
+            qty=0,
+            entry=entry,
+            exit_price=exit_price,
+            pnl=pnl,
+            result=result
+        )
+
+        if pnl < 0:
+            daily_loss += abs(pnl)
+
+        in_position = False
+
+        msg = f"📊 TRADE CLOSED | Result={result} | PnL={pnl} USDT"
+        print(msg, flush=True)
+        send_telegram(msg)
+
+
+# =========================
 # EXECUTION TRADE (BYBIT V5)
 # =========================
 def place_trade(signal, qty, entry_price):
@@ -87,7 +124,6 @@ def place_trade(signal, qty, entry_price):
         stop_loss = entry_price * (1 + STOP_LOSS_PCT)
         take_profit = entry_price * (1 - TAKE_PROFIT_PCT)
 
-    # ✅ ORDRE MARKET AVEC SL/TP ATTACHÉS (BYBIT V5)
     exchange.create_market_order(
         symbol=SYMBOL,
         side=side,
@@ -124,6 +160,9 @@ def run():
 
     print("🤖 Bot lancé (BYBIT MAINNET – V5)", flush=True)
     send_telegram("🤖 Bot Bybit V5 démarré")
+
+    # 👉 INIT LOGGER CSV
+    init_logger()
 
     # Leverage (safe)
     try:
@@ -171,6 +210,9 @@ def run():
 
                 if qty > 0:
                     place_trade(signal, qty, price)
+
+            # 👉 CHECK CLOTURE TRADE
+            check_trade_closed()
 
             time.sleep(300)
 
