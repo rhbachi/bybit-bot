@@ -25,7 +25,7 @@ RR_MULTIPLIER = 2.3        # TP = 2.3 x SL
 MAX_TRADES_PER_DAY = 10
 MAX_DAILY_LOSS_PCT = 0.20
 
-COOLDOWN_SECONDS = 600     # 10 minutes
+COOLDOWN_SECONDS = 600     # 10 minutes (APRÈS clôture)
 
 # =========================
 # ÉTAT GLOBAL
@@ -34,7 +34,8 @@ in_position = False
 trades_today = 0
 daily_loss = 0.0
 current_day = datetime.now(timezone.utc).date()
-last_trade_time = 0
+
+last_trade_time = None    # ⬅️ IMPORTANT : None avant le 1er trade
 
 # =========================
 # UTILITAIRES
@@ -77,7 +78,7 @@ def enforce_min_qty(symbol, qty):
 
 
 # =========================
-# LOGGING CLÔTURE TRADE
+# LOGGING & FIN DE TRADE
 # =========================
 def check_trade_closed():
     global in_position, daily_loss, last_trade_time
@@ -85,6 +86,7 @@ def check_trade_closed():
     positions = exchange.fetch_positions([SYMBOL])
     pos = next((p for p in positions if p["symbol"] == SYMBOL), None)
 
+    # Trade clôturé détecté
     if in_position and pos and float(pos.get("contracts", 0)) == 0:
         pnl = float(pos.get("realizedPnl", 0))
         entry = float(pos.get("entryPrice", 0))
@@ -106,7 +108,7 @@ def check_trade_closed():
             daily_loss += abs(pnl)
 
         in_position = False
-        last_trade_time = time.time()   # 🔒 cooldown démarre ici
+        last_trade_time = time.time()   # ✅ COOLDOWN DÉMARRE ICI
 
         msg = f"📊 TRADE CLOSED | {result} | PnL={pnl} USDT"
         print(msg, flush=True)
@@ -117,7 +119,7 @@ def check_trade_closed():
 # EXECUTION TRADE (BYBIT V5)
 # =========================
 def place_trade(signal, qty, entry_price):
-    global in_position, trades_today, last_trade_time
+    global in_position, trades_today
 
     side = "buy" if signal == "long" else "sell"
 
@@ -144,7 +146,6 @@ def place_trade(signal, qty, entry_price):
 
     in_position = True
     trades_today += 1
-    last_trade_time = time.time()
 
     msg = (
         f"✅ *TRADE {signal.upper()}*\n"
@@ -161,12 +162,12 @@ def place_trade(signal, qty, entry_price):
 
 
 # =========================
-# MAIN LOOP (24/7 SAFE)
+# MAIN LOOP (PROPRE)
 # =========================
 def run():
     global in_position, daily_loss
 
-    print("🤖 Bot lancé (BYBIT MAINNET – V5)", flush=True)
+    print("🤖 Bot lancé (BYBIT MAINNET – STABLE)", flush=True)
     send_telegram("🤖 Bot Bybit V5 démarré")
 
     init_logger()
@@ -180,16 +181,17 @@ def run():
         try:
             reset_daily_counters()
 
-            # 🛑 kill switch journalier
+            # 🛑 Kill switch journalier
             if daily_loss >= CAPITAL * MAX_DAILY_LOSS_PCT:
                 send_telegram("🛑 Kill switch journalier – bot en pause")
                 time.sleep(3600)
                 continue
 
-            # ⏳ cooldown
-            if time.time() - last_trade_time < COOLDOWN_SECONDS:
-                time.sleep(30)
-                continue
+            # ⏳ Cooldown (UNIQUEMENT après un trade clôturé)
+            if last_trade_time is not None:
+                if time.time() - last_trade_time < COOLDOWN_SECONDS:
+                    time.sleep(30)
+                    continue
 
             if trades_today >= MAX_TRADES_PER_DAY:
                 time.sleep(1800)
