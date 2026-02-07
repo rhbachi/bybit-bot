@@ -11,16 +11,17 @@ from config import (
     LEVERAGE,
 )
 
-from notifier import send_telegram
+from strategy import apply_indicators, check_signal
 from risk import calculate_position_size
+from notifier import send_telegram
 
 # =========================
 # PARAMÈTRES STRATÉGIE
 # =========================
-STOP_LOSS_PCT = 0.006     # 0.6%
-TAKE_PROFIT_PCT = 0.009  # 0.9%
+STOP_LOSS_PCT = 0.006      # 0.6%
+TAKE_PROFIT_PCT = 0.009   # 0.9%
 
-MAX_TRADES_PER_DAY = 15
+MAX_TRADES_PER_DAY = 10
 MAX_DAILY_LOSS_PCT = 0.20  # 20%
 
 # =========================
@@ -30,40 +31,6 @@ in_position = False
 trades_today = 0
 daily_loss = 0.0
 current_day = datetime.now(timezone.utc).date()
-
-# =========================
-# INDICATEURS
-# =========================
-def apply_indicators(df):
-    # EMA plus rapides
-    df["ema7"] = df["close"].ewm(span=7, adjust=False).mean()
-    df["ema14"] = df["close"].ewm(span=14, adjust=False).mean()
-
-    # RSI
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = -delta.clip(upper=0).rolling(14).mean()
-    rs = gain / loss
-    df["rsi"] = 100 - (100 / (1 + rs))
-
-    return df
-
-
-def check_signal(df):
-    if len(df) < 20:
-        return None
-
-    last = df.iloc[-1]
-
-    # LONG plus permissif
-    if last.ema7 > last.ema14 and 45 <= last.rsi <= 70:
-        return "long"
-
-    # SHORT plus permissif
-    if last.ema7 < last.ema14 and 30 <= last.rsi <= 55:
-        return "short"
-
-    return None
 
 # =========================
 # UTILITAIRES
@@ -97,31 +64,53 @@ def get_safe_position_size(price):
     return round(qty, 4)
 
 
+def enforce_min_qty(symbol, qty):
+    if "BTC" in symbol:
+        return max(qty, 0.001)
+    if "ETH" in symbol:
+        return max(qty, 0.01)
+    return qty
+
+
 def place_trade(signal, qty, entry_price):
     global in_position, trades_today
 
     side = "buy" if signal == "long" else "sell"
+    exit_side = "sell" if signal == "long" else "buy"
+
+    # ---- MARKET ORDER ----
     exchange.create_market_order(SYMBOL, side, qty)
 
+    # ---- SL / TP ----
     if signal == "long":
-        sl = entry_price * (1 - STOP_LOSS_PCT)
-        tp = entry_price * (1 + TAKE_PROFIT_PCT)
-        exit_side = "sell"
+        stop_loss = entry_price * (1 - STOP_LOSS_PCT)
+        take_profit = entry_price * (1 + TAKE_PROFIT_PCT)
+        trigger_direction = "descending"
     else:
-        sl = entry_price * (1 + STOP_LOSS_PCT)
-        tp = entry_price * (1 - TAKE_PROFIT_PCT)
-        exit_side = "buy"
+        stop_loss = entry_price * (1 + STOP_LOSS_PCT)
+        take_profit = entry_price * (1 - TAKE_PROFIT_PCT)
+        trigger_direction = "ascending"
 
+    # Stop Loss (Bybit V5)
     exchange.create_order(
-        SYMBOL,
-        "stop",
-        exit_side,
-        qty,
-        None,
-        {"stopPrice": sl}
+        symbol=SYMBOL,
+        type="stop",
+        side=exit_side,
+        amount=qty,
+        price=None,
+        params={
+            "stopPrice": stop_loss,
+            "triggerDirection": trigger_direction
+        }
     )
 
-    exchange.create_limit_order(SYMBOL, exit_side, qty, tp)
+    # Take Profit
+    exchange.create_limit_order(
+        symbol=SYMBOL,
+        side=exit_side,
+        amount=qty,
+        price=take_profit
+    )
 
     in_position = True
     trades_today += 1
@@ -131,24 +120,27 @@ def place_trade(signal, qty, entry_price):
         f"Pair: {SYMBOL}\n"
         f"Qty: {qty}\n"
         f"Entry: {round(entry_price,2)}\n"
-        f"SL: {round(sl,2)}\n"
-        f"TP: {round(tp,2)}"
+        f"SL: {round(stop_loss,2)}\n"
+        f"TP: {round(take_profit,2)}"
     )
 
     print(msg, flush=True)
     send_telegram(msg)
 
+
 # =========================
-# MAIN LOOP
+# MAIN LOOP (24/7 SAFE)
 # =========================
 def run():
     global in_position, daily_loss
 
-    print("🤖 Bot lancé (BYBIT MAINNET – BTCUSDT)", flush=True)
+    print("🤖 Bot lancé (BYBIT MAINNET – LINEAR)", flush=True)
     send_telegram("🤖 Bot démarré (stratégie assouplie)")
 
+    # Leverage (Bybit peut refuser si déjà réglé)
     try:
         exchange.set_leverage(LEVERAGE, SYMBOL)
+        print(f"🔒 Leverage x{LEVERAGE} activé", flush=True)
     except Exception as e:
         if "leverage not modified" in str(e):
             print(f"ℹ️ Leverage déjà à x{LEVERAGE}", flush=True)
@@ -160,7 +152,7 @@ def run():
             reset_daily_counters()
 
             if daily_loss >= CAPITAL * MAX_DAILY_LOSS_PCT:
-                send_telegram("🛑 Kill switch journalier – pause")
+                send_telegram("🛑 Kill switch journalier – bot en pause")
                 time.sleep(3600)
                 continue
 
@@ -168,7 +160,8 @@ def run():
                 time.sleep(1800)
                 continue
 
-            df = apply_indicators(fetch_data())
+            df = fetch_data()
+            df = apply_indicators(df)
             signal = check_signal(df)
 
             print("⏳ Analyse marché...", flush=True)
@@ -186,6 +179,7 @@ def run():
 
                 safe_qty = get_safe_position_size(price)
                 qty = min(theoretical_qty, safe_qty)
+                qty = enforce_min_qty(SYMBOL, qty)
 
                 if qty > 0:
                     place_trade(signal, qty, price)
@@ -193,11 +187,12 @@ def run():
             time.sleep(300)
 
         except Exception as e:
-            print("❌ Erreur attrapée:", e, flush=True)
-            send_telegram(f"❌ Erreur bot: {e}")
+            print("❌ Erreur bot (non bloquante):", e, flush=True)
+            send_telegram(f"❌ Erreur bot (non bloquante): {e}")
             time.sleep(60)
 
+
 # =========================
-# ENTRY
+# ENTRY POINT
 # =========================
 run()
