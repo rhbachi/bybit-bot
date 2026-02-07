@@ -13,6 +13,7 @@ from config import (
 
 from strategy import apply_indicators, check_signal
 from risk import calculate_position_size
+from notifier import send_telegram
 
 # =========================
 # PARAMÈTRES STRATÉGIE
@@ -42,6 +43,7 @@ def reset_daily_counters():
         daily_loss = 0.0
         current_day = today
         print("🔄 Nouveau jour → compteurs réinitialisés", flush=True)
+        send_telegram("🔄 Nouveau jour → compteurs réinitialisés")
 
 
 def fetch_data():
@@ -96,11 +98,17 @@ def place_trade(signal, qty, entry_price):
     in_position = True
     trades_today += 1
 
-    print(
-        f"✅ TRADE {signal.upper()} | Qty={qty} | Entry={round(entry_price,2)} "
-        f"| SL={round(stop_loss,2)} | TP={round(take_profit,2)}",
-        flush=True
+    msg = (
+        f"✅ *TRADE {signal.upper()}*\n"
+        f"Pair: {SYMBOL}\n"
+        f"Qty: {qty}\n"
+        f"Entry: {round(entry_price,2)}\n"
+        f"SL: {round(stop_loss,2)}\n"
+        f"TP: {round(take_profit,2)}"
     )
+
+    print(msg, flush=True)
+    send_telegram(msg)
 
 
 # =========================
@@ -110,6 +118,7 @@ def run():
     global in_position, daily_loss
 
     print("🤖 Bot lancé (BYBIT MAINNET – LINEAR BTCUSDT)", flush=True)
+    send_telegram("🤖 Bot démarré (Bybit MAINNET – BTCUSDT)")
 
     # 🔒 Set leverage (Bybit peut refuser si déjà réglé)
     try:
@@ -120,22 +129,21 @@ def run():
             print(f"ℹ️ Leverage déjà à x{LEVERAGE}", flush=True)
         else:
             print("⚠️ Erreur set_leverage:", e, flush=True)
+            send_telegram(f"⚠️ Erreur set_leverage: {e}")
 
     while True:
         try:
             reset_daily_counters()
 
-            # 🛑 KILL SWITCH SÉCURITÉ (SANS ARRÊTER LE BOT)
+            # 🛑 KILL SWITCH (SANS ARRÊT)
             if daily_loss >= CAPITAL * MAX_DAILY_LOSS_PCT:
-                print(
-                    "🛑 KILL SWITCH – perte journalière max atteinte "
-                    "(bot en pause, pas d'arrêt)",
-                    flush=True
-                )
+                msg = "🛑 KILL SWITCH – perte journalière max atteinte (bot en pause)"
+                print(msg, flush=True)
+                send_telegram(msg)
                 time.sleep(3600)
                 continue
 
-            # Limite de trades journaliers
+            # Limite trades journaliers
             if trades_today >= MAX_TRADES_PER_DAY:
                 print("🛑 Max trades journaliers atteint – pause", flush=True)
                 time.sleep(1800)
@@ -163,12 +171,12 @@ def run():
                 else:
                     print("⚠️ Quantité invalide, trade ignoré", flush=True)
 
-            # Timeframe 5 minutes
-            time.sleep(300)
+            time.sleep(300)  # TF 5 minutes
 
         except Exception as e:
-            # ❗ NE JAMAIS QUITTER LE PROCESS
+            # ❗ Le bot ne doit JAMAIS s’arrêter
             print("❌ Erreur attrapée (bot continue):", e, flush=True)
+            send_telegram(f"❌ Erreur bot (non bloquante): {e}")
             time.sleep(60)
 
 
