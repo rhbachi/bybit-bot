@@ -22,7 +22,7 @@ STOP_LOSS_PCT = 0.006      # 0.6%
 TAKE_PROFIT_PCT = 0.009   # 0.9%
 
 MAX_TRADES_PER_DAY = 10
-MAX_DAILY_LOSS_PCT = 0.20  # 20%
+MAX_DAILY_LOSS_PCT = 0.20
 
 # =========================
 # ÉTAT GLOBAL
@@ -72,44 +72,32 @@ def enforce_min_qty(symbol, qty):
     return qty
 
 
+# =========================
+# EXECUTION TRADE (BYBIT V5)
+# =========================
 def place_trade(signal, qty, entry_price):
     global in_position, trades_today
 
     side = "buy" if signal == "long" else "sell"
-    exit_side = "sell" if signal == "long" else "buy"
 
-    # ---- MARKET ORDER ----
-    exchange.create_market_order(SYMBOL, side, qty)
-
-    # ---- SL / TP ----
     if signal == "long":
         stop_loss = entry_price * (1 - STOP_LOSS_PCT)
         take_profit = entry_price * (1 + TAKE_PROFIT_PCT)
-        trigger_direction = "descending"
     else:
         stop_loss = entry_price * (1 + STOP_LOSS_PCT)
         take_profit = entry_price * (1 - TAKE_PROFIT_PCT)
-        trigger_direction = "ascending"
 
-    # Stop Loss (Bybit V5)
-    exchange.create_order(
+    # ✅ ORDRE MARKET AVEC SL/TP ATTACHÉS (BYBIT V5)
+    exchange.create_market_order(
         symbol=SYMBOL,
-        type="stop",
-        side=exit_side,
+        side=side,
         amount=qty,
-        price=None,
         params={
-            "stopPrice": stop_loss,
-            "triggerDirection": trigger_direction
+            "stopLoss": stop_loss,
+            "takeProfit": take_profit,
+            "slTriggerBy": "LastPrice",
+            "tpTriggerBy": "LastPrice"
         }
-    )
-
-    # Take Profit
-    exchange.create_limit_order(
-        symbol=SYMBOL,
-        side=exit_side,
-        amount=qty,
-        price=take_profit
     )
 
     in_position = True
@@ -134,10 +122,10 @@ def place_trade(signal, qty, entry_price):
 def run():
     global in_position, daily_loss
 
-    print("🤖 Bot lancé (BYBIT MAINNET – LINEAR)", flush=True)
-    send_telegram("🤖 Bot démarré (stratégie assouplie)")
+    print("🤖 Bot lancé (BYBIT MAINNET – V5)", flush=True)
+    send_telegram("🤖 Bot Bybit V5 démarré")
 
-    # Leverage (Bybit peut refuser si déjà réglé)
+    # Leverage (safe)
     try:
         exchange.set_leverage(LEVERAGE, SYMBOL)
         print(f"🔒 Leverage x{LEVERAGE} activé", flush=True)
