@@ -20,10 +20,12 @@ from logger import init_logger, log_trade
 # PARAMÈTRES STRATÉGIE
 # =========================
 STOP_LOSS_PCT = 0.006      # 0.6%
-TAKE_PROFIT_PCT = 0.009   # 0.9%
+RR_MULTIPLIER = 2.3        # TP = 2.3 x SL
 
 MAX_TRADES_PER_DAY = 10
 MAX_DAILY_LOSS_PCT = 0.20
+
+COOLDOWN_SECONDS = 600     # 10 minutes
 
 # =========================
 # ÉTAT GLOBAL
@@ -32,6 +34,7 @@ in_position = False
 trades_today = 0
 daily_loss = 0.0
 current_day = datetime.now(timezone.utc).date()
+last_trade_time = 0
 
 # =========================
 # UTILITAIRES
@@ -77,7 +80,7 @@ def enforce_min_qty(symbol, qty):
 # LOGGING CLÔTURE TRADE
 # =========================
 def check_trade_closed():
-    global in_position, daily_loss
+    global in_position, daily_loss, last_trade_time
 
     positions = exchange.fetch_positions([SYMBOL])
     pos = next((p for p in positions if p["symbol"] == SYMBOL), None)
@@ -103,8 +106,9 @@ def check_trade_closed():
             daily_loss += abs(pnl)
 
         in_position = False
+        last_trade_time = time.time()   # 🔒 cooldown démarre ici
 
-        msg = f"📊 TRADE CLOSED | Result={result} | PnL={pnl} USDT"
+        msg = f"📊 TRADE CLOSED | {result} | PnL={pnl} USDT"
         print(msg, flush=True)
         send_telegram(msg)
 
@@ -113,16 +117,18 @@ def check_trade_closed():
 # EXECUTION TRADE (BYBIT V5)
 # =========================
 def place_trade(signal, qty, entry_price):
-    global in_position, trades_today
+    global in_position, trades_today, last_trade_time
 
     side = "buy" if signal == "long" else "sell"
 
     if signal == "long":
         stop_loss = entry_price * (1 - STOP_LOSS_PCT)
-        take_profit = entry_price * (1 + TAKE_PROFIT_PCT)
+        sl_distance = entry_price - stop_loss
+        take_profit = entry_price + sl_distance * RR_MULTIPLIER
     else:
         stop_loss = entry_price * (1 + STOP_LOSS_PCT)
-        take_profit = entry_price * (1 - TAKE_PROFIT_PCT)
+        sl_distance = stop_loss - entry_price
+        take_profit = entry_price - sl_distance * RR_MULTIPLIER
 
     exchange.create_market_order(
         symbol=SYMBOL,
@@ -138,6 +144,7 @@ def place_trade(signal, qty, entry_price):
 
     in_position = True
     trades_today += 1
+    last_trade_time = time.time()
 
     msg = (
         f"✅ *TRADE {signal.upper()}*\n"
@@ -145,7 +152,8 @@ def place_trade(signal, qty, entry_price):
         f"Qty: {qty}\n"
         f"Entry: {round(entry_price,2)}\n"
         f"SL: {round(stop_loss,2)}\n"
-        f"TP: {round(take_profit,2)}"
+        f"TP: {round(take_profit,2)}\n"
+        f"RR: {RR_MULTIPLIER}"
     )
 
     print(msg, flush=True)
@@ -161,26 +169,26 @@ def run():
     print("🤖 Bot lancé (BYBIT MAINNET – V5)", flush=True)
     send_telegram("🤖 Bot Bybit V5 démarré")
 
-    # 👉 INIT LOGGER CSV
     init_logger()
 
-    # Leverage (safe)
     try:
         exchange.set_leverage(LEVERAGE, SYMBOL)
-        print(f"🔒 Leverage x{LEVERAGE} activé", flush=True)
-    except Exception as e:
-        if "leverage not modified" in str(e):
-            print(f"ℹ️ Leverage déjà à x{LEVERAGE}", flush=True)
-        else:
-            send_telegram(f"⚠️ Erreur set_leverage: {e}")
+    except Exception:
+        pass
 
     while True:
         try:
             reset_daily_counters()
 
+            # 🛑 kill switch journalier
             if daily_loss >= CAPITAL * MAX_DAILY_LOSS_PCT:
                 send_telegram("🛑 Kill switch journalier – bot en pause")
                 time.sleep(3600)
+                continue
+
+            # ⏳ cooldown
+            if time.time() - last_trade_time < COOLDOWN_SECONDS:
+                time.sleep(30)
                 continue
 
             if trades_today >= MAX_TRADES_PER_DAY:
@@ -211,14 +219,12 @@ def run():
                 if qty > 0:
                     place_trade(signal, qty, price)
 
-            # 👉 CHECK CLOTURE TRADE
             check_trade_closed()
-
             time.sleep(300)
 
         except Exception as e:
             print("❌ Erreur bot (non bloquante):", e, flush=True)
-            send_telegram(f"❌ Erreur bot (non bloquante): {e}")
+            send_telegram(f"❌ Erreur bot: {e}")
             time.sleep(60)
 
 
