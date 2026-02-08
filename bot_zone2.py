@@ -8,7 +8,6 @@ from config import (
     TIMEFRAME,
     CAPITAL,
     RISK_PER_TRADE,
-    MAX_TRADES_PER_DAY,
     LEVERAGE,
 )
 
@@ -19,10 +18,11 @@ from logger import init_logger, log_trade
 
 
 # =========================
-# PARAMÈTRES STRATÉGIE (ALIGNÉS BOT1)
+# PARAMÈTRES STRATÉGIE (COMME BOT1)
 # =========================
-RR_MULTIPLIER = 2.0     # change à 2.3 si besoin
-SLEEP_SECONDS = 300     # 5 minutes
+RR_MULTIPLIER = 2.0          # RR fixe pour Zone2
+MAX_TRADES_PER_DAY = 3       # limite journalière (Zone2 plus sélectif)
+SLEEP_SECONDS = 300          # 5 minutes
 
 
 # =========================
@@ -33,21 +33,21 @@ trades_today = 0
 current_day = datetime.now(timezone.utc).date()
 
 
+def reset_daily_counters():
+    global trades_today, current_day
+    today = datetime.now(timezone.utc).date()
+    if today != current_day:
+        trades_today = 0
+        current_day = today
+        send_telegram("🔄 Zone2 – Nouveau jour → compteurs réinitialisés")
+
+
 def fetch_data():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
     return pd.DataFrame(
         ohlcv,
         columns=["time", "open", "high", "low", "close", "volume"]
     )
-
-
-def reset_daily():
-    global trades_today, current_day
-    today = datetime.now(timezone.utc).date()
-    if today != current_day:
-        trades_today = 0
-        current_day = today
-        send_telegram("🔄 Zone2 Bot – Nouveau jour")
 
 
 def run():
@@ -65,10 +65,10 @@ def run():
 
     while True:
         try:
-            reset_daily()
+            reset_daily_counters()
 
             if trades_today >= MAX_TRADES_PER_DAY:
-                time.sleep(900)
+                time.sleep(1800)
                 continue
 
             df = fetch_data()
@@ -104,9 +104,9 @@ def run():
 
                 if qty > 0:
                     exchange.create_market_order(
-                        SYMBOL,
-                        side,
-                        qty,
+                        symbol=SYMBOL,
+                        side=side,
+                        amount=qty,
                         params={
                             "stopLoss": sl,
                             "takeProfit": tp,
@@ -122,7 +122,7 @@ def run():
                     print(msg, flush=True)
                     send_telegram(msg)
 
-            # Vérifier clôture de position
+            # Détection clôture position (simple, comme Bot1)
             positions = exchange.fetch_positions([SYMBOL])
             pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
 
@@ -139,4 +139,7 @@ def run():
             time.sleep(60)
 
 
+# =========================
+# ENTRY POINT
+# =========================
 run()
