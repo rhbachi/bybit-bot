@@ -18,6 +18,16 @@ from notifier import send_telegram
 from logger import init_logger, log_trade
 
 
+# =========================
+# PARAMÈTRES STRATÉGIE (COMME BOT1)
+# =========================
+RR_MULTIPLIER = 2.0     # 🔁 RR FIXE (change à 2.3 si tu veux)
+SLEEP_SECONDS = 300     # 5 minutes
+
+
+# =========================
+# ÉTAT GLOBAL
+# =========================
 in_position = False
 trades_today = 0
 current_day = datetime.now(timezone.utc).date()
@@ -64,10 +74,10 @@ def run():
             df = fetch_data()
             df = apply_indicators(df)
 
-            # Étape 1 : détecter Zone 1 (observation)
+            # Étape 1 : Zone 1 (observation)
             detect_zone_1(df)
 
-            # Étape 2 : détecter Zone 2 (exécution)
+            # Étape 2 : Zone 2 (exécution)
             signal = detect_zone_2(df)
 
             if signal and not in_position:
@@ -76,14 +86,15 @@ def run():
 
                 if signal == "long":
                     sl = last.low
-                    tp = price + (price - sl) * RR
+                    tp = price + (price - sl) * RR_MULTIPLIER
                     side = "buy"
                 else:
                     sl = last.high
-                    tp = price - (sl - price) * RR
+                    tp = price - (sl - price) * RR_MULTIPLIER
                     side = "sell"
 
                 sl_distance = abs(price - sl)
+
                 qty = calculate_position_size(
                     CAPITAL,
                     RISK_PER_TRADE,
@@ -111,16 +122,16 @@ def run():
                     print(msg, flush=True)
                     send_telegram(msg)
 
-            # Vérifier clôture
+            # Vérifier clôture position
             positions = exchange.fetch_positions([SYMBOL])
             pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
 
-            if in_position and pos and float(pos.get("contracts", 0)) == 0:
+            if in_position and pos and float(pos.get("contracts", 0) or 0) == 0:
                 pnl = float(pos.get("realizedPnl", 0) or 0)
                 log_trade(SYMBOL, "ZONE2", 0, 0, 0, pnl, "CLOSED")
                 in_position = False
 
-            time.sleep(300)
+            time.sleep(SLEEP_SECONDS)
 
         except Exception as e:
             print("❌ Zone2 Bot error:", e, flush=True)
