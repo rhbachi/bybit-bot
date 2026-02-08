@@ -8,7 +8,6 @@ from config import (
     TIMEFRAME,
     CAPITAL,
     RISK_PER_TRADE,
-    RR,
     MAX_TRADES_PER_DAY,
     LEVERAGE,
 )
