@@ -16,10 +16,18 @@ from risk import calculate_position_size
 from notifier import send_telegram
 from logger import init_logger, log_trade
 
-RR_MULTIPLIER = 2.0
-MAX_TRADES_PER_DAY = 3
-SLEEP_SECONDS = 300
 
+# =========================
+# PARAMÈTRES STRATÉGIE (ALIGNÉS BOT1)
+# =========================
+RR_MULTIPLIER = 2.0          # TP = RR x SL
+MAX_TRADES_PER_DAY = 3
+SLEEP_SECONDS = 300          # 5 minutes
+
+
+# =========================
+# ÉTAT GLOBAL
+# =========================
 in_position = False
 trades_today = 0
 current_day = datetime.now(timezone.utc).date()
@@ -31,7 +39,7 @@ def reset_daily_counters():
     if today != current_day:
         trades_today = 0
         current_day = today
-        send_telegram("🔄 Zone2 – Nouveau jour")
+        send_telegram("🔄 Zone2 – Nouveau jour → compteurs réinitialisés")
 
 
 def fetch_data():
@@ -47,6 +55,7 @@ def run():
 
     print("🤖 Zone 2 Bot démarré", flush=True)
     send_telegram("🤖 Zone 2 Bot démarré")
+
     init_logger()
 
     try:
@@ -64,9 +73,12 @@ def run():
 
             df = fetch_data()
             df = apply_indicators(df)
-            print("⏳ Analyse marché...", flush=True)
+            print("⏳ Analyse marché (Zone2)...", flush=True)
 
+            # Zone 1 : observation
             detect_zone_1(df)
+
+            # Zone 2 : exécution
             signal = detect_zone_2(df)
 
             if signal and not in_position:
@@ -82,8 +94,15 @@ def run():
                     tp = price - (sl - price) * RR_MULTIPLIER
                     side = "sell"
 
+                # 🔑 Alignement avec Bot1
+                sl_pct = abs(price - sl) / price if price > 0 else 0
+
                 qty = calculate_position_size(
-                    CAPITAL, RISK_PER_TRADE, abs(price - sl), price
+                    CAPITAL,
+                    RISK_PER_TRADE,
+                    sl_pct,
+                    price,
+                    LEVERAGE
                 )
 
                 if qty > 0:
@@ -114,6 +133,7 @@ def run():
                     print(msg, flush=True)
                     send_telegram(msg)
 
+            # Détection clôture position
             positions = exchange.fetch_positions([SYMBOL])
             pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
 
@@ -137,8 +157,12 @@ def run():
             time.sleep(SLEEP_SECONDS)
 
         except Exception as e:
+            print("❌ Zone2 Bot error:", e, flush=True)
             send_telegram(f"❌ Zone2 Bot error: {e}")
             time.sleep(60)
 
 
+# =========================
+# ENTRY POINT
+# =========================
 run()
