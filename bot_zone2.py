@@ -73,7 +73,6 @@ def run():
 
             df = fetch_data()
             df = apply_indicators(df)
-            signal = check_signal(df)
 
             print("⏳ Analyse marché...", flush=True)
 
