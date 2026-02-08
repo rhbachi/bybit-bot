@@ -1,9 +1,8 @@
 import pandas as pd
 
 EMA_PERIOD = 20
-MIN_EMA_SLOPE = 0.0005   # anti-range
+MIN_EMA_SLOPE = 0.0005
 
-# Mémoire Zone 1
 zone_1_level = None
 zone_1_direction = None
 
@@ -23,15 +22,14 @@ def crypto_doji(row):
     upper_wick = row.high - max(row.open, row.close)
     lower_wick = min(row.open, row.close) - row.low
 
-    # Corps très petit
     if body > candle_range * 0.25:
         return None
 
     if upper_wick > candle_range * 0.6:
-        return "wick_top"      # rejet haussier → short potentiel
+        return "wick_top"
 
     if lower_wick > candle_range * 0.6:
-        return "wick_bottom"   # rejet baissier → long potentiel
+        return "wick_bottom"
 
     return None
 
@@ -45,7 +43,6 @@ def detect_zone_1(df: pd.DataFrame):
     if doji is None:
         return None
 
-    # Biais EMA
     if last.close > last.ema20 and doji == "wick_top":
         zone_1_level = last.high
         zone_1_direction = "short"
@@ -68,17 +65,13 @@ def detect_zone_2(df: pd.DataFrame):
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    # Anti-range
     if abs(df.ema_slope.iloc[-1]) < MIN_EMA_SLOPE:
         return None
 
-    # Confirmation structure
-    if zone_1_direction == "short":
-        if last.high < prev.high:
-            return "short"
+    if zone_1_direction == "short" and last.high < prev.high:
+        return "short"
 
-    if zone_1_direction == "long":
-        if last.low > prev.low:
-            return "long"
+    if zone_1_direction == "long" and last.low > prev.low:
+        return "long"
 
     return None

@@ -19,9 +19,9 @@ from logger import init_logger, log_trade
 
 
 # =========================
-# PARAMÈTRES STRATÉGIE (COMME BOT1)
+# PARAMÈTRES STRATÉGIE (ALIGNÉS BOT1)
 # =========================
-RR_MULTIPLIER = 2.0     # 🔁 RR FIXE (change à 2.3 si tu veux)
+RR_MULTIPLIER = 2.0     # change à 2.3 si besoin
 SLEEP_SECONDS = 300     # 5 minutes
 
 
@@ -74,10 +74,10 @@ def run():
             df = fetch_data()
             df = apply_indicators(df)
 
-            # Étape 1 : Zone 1 (observation)
+            # Zone 1 : observation
             detect_zone_1(df)
 
-            # Étape 2 : Zone 2 (exécution)
+            # Zone 2 : exécution
             signal = detect_zone_2(df)
 
             if signal and not in_position:
@@ -122,7 +122,7 @@ def run():
                     print(msg, flush=True)
                     send_telegram(msg)
 
-            # Vérifier clôture position
+            # Vérifier clôture de position
             positions = exchange.fetch_positions([SYMBOL])
             pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
 
