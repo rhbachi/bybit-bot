@@ -21,7 +21,6 @@ from logger import init_logger, log_trade
 # =========================
 STOP_LOSS_PCT = 0.006
 RR_MULTIPLIER = 2.3
-
 MAX_TRADES_PER_DAY = 10
 MAX_DAILY_LOSS_PCT = 0.20
 COOLDOWN_SECONDS = 600
@@ -33,126 +32,161 @@ in_position = False
 trades_today = 0
 daily_loss = 0.0
 current_day = datetime.now(timezone.utc).date()
+
 last_trade_time = None
+open_trade_ts = None
+open_trade_side = None
+open_trade_qty = None
+open_trade_entry = None
 
-
-def safe_float(value, default=0.0):
+# =========================
+# UTILS
+# =========================
+def safe_float(v, default=0.0):
     try:
-        return float(value) if value is not None else default
+        return float(v)
     except Exception:
         return default
 
 
-def reset_daily_counters():
+def reset_daily():
     global trades_today, daily_loss, current_day
     today = datetime.now(timezone.utc).date()
     if today != current_day:
         trades_today = 0
         daily_loss = 0.0
         current_day = today
-        send_telegram("🔄 Nouveau jour → compteurs réinitialisés")
+        send_telegram("🔄 Nouveau jour – compteurs réinitialisés")
 
 
 def fetch_data():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
     return pd.DataFrame(
-        ohlcv,
-        columns=["time", "open", "high", "low", "close", "volume"]
+        ohlcv, columns=["time", "open", "high", "low", "close", "volume"]
     )
 
 
-def get_safe_position_size(price):
-    balance = exchange.fetch_balance()
-    usdt_free = safe_float(balance.get("USDT", {}).get("free"))
-    max_position_value = usdt_free * LEVERAGE * 0.9
-    return round(max_position_value / price, 4) if price > 0 else 0
-
-
-def enforce_min_qty(symbol, qty):
-    if "BTC" in symbol:
-        return max(qty, 0.001)
-    if "ETH" in symbol:
-        return max(qty, 0.01)
-    return qty
-
-
-def check_trade_closed():
-    global in_position, daily_loss, last_trade_time
-
-    if not in_position:
-        return
-
-    positions = exchange.fetch_positions([SYMBOL])
-    pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
-    if not pos:
-        return
-
-    contracts = safe_float(pos.get("contracts"))
-    if contracts > 0:
-        return
-
-    pnl = safe_float(pos.get("realizedPnl"))
-    result = "WIN ✅" if pnl > 0 else "LOSS ❌"
-
-    log_trade(SYMBOL, result, 0, 0, 0, pnl, result)
-
-    if pnl < 0:
-        daily_loss += abs(pnl)
-
-    in_position = False
-    last_trade_time = time.time()
-
-    msg = f"📊 *TRADE FERMÉ*\nPair: {SYMBOL}\nRésultat: {result}\nPnL: {round(pnl,2)} USDT"
-    print(msg, flush=True)
-    send_telegram(msg)
-
-
-def place_trade(signal, qty, entry_price):
+# =========================
+# TRADE OPEN
+# =========================
+def place_trade(signal, qty, entry):
     global in_position, trades_today
+    global open_trade_ts, open_trade_side, open_trade_qty, open_trade_entry
 
     side = "buy" if signal == "long" else "sell"
 
     if signal == "long":
-        stop_loss = entry_price * (1 - STOP_LOSS_PCT)
-        tp = entry_price + (entry_price - stop_loss) * RR_MULTIPLIER
+        sl = entry * (1 - STOP_LOSS_PCT)
+        tp = entry + (entry - sl) * RR_MULTIPLIER
     else:
-        stop_loss = entry_price * (1 + STOP_LOSS_PCT)
-        tp = entry_price - (stop_loss - entry_price) * RR_MULTIPLIER
+        sl = entry * (1 + STOP_LOSS_PCT)
+        tp = entry - (sl - entry) * RR_MULTIPLIER
 
     exchange.create_market_order(
-        symbol=SYMBOL,
-        side=side,
-        amount=qty,
+        SYMBOL,
+        side,
+        qty,
         params={
-            "stopLoss": stop_loss,
+            "stopLoss": sl,
             "takeProfit": tp,
             "slTriggerBy": "LastPrice",
-            "tpTriggerBy": "LastPrice"
-        }
+            "tpTriggerBy": "LastPrice",
+        },
     )
 
     in_position = True
     trades_today += 1
 
+    open_trade_ts = exchange.milliseconds()
+    open_trade_side = side
+    open_trade_qty = qty
+    open_trade_entry = entry
+
     msg = (
-        f"📈 *TRADE OUVERT*\n"
+        f"📈 TRADE OUVERT\n"
         f"Pair: {SYMBOL}\n"
         f"Direction: {signal.upper()}\n"
         f"Qty: {qty}\n"
-        f"Entry: {round(entry_price,2)}\n"
-        f"SL: {round(stop_loss,2)}\n"
-        f"TP: {round(tp,2)}\n"
+        f"Entry: {round(entry, 2)}\n"
+        f"SL: {round(sl, 2)}\n"
+        f"TP: {round(tp, 2)}\n"
         f"RR: {RR_MULTIPLIER}"
     )
-    print(msg, flush=True)
     send_telegram(msg)
+    print(msg, flush=True)
 
 
+# =========================
+# TRADE CLOSE (PRO V5)
+# =========================
+def check_trade_closed():
+    global in_position, daily_loss, last_trade_time
+    global open_trade_ts, open_trade_side, open_trade_qty, open_trade_entry
+
+    if not in_position:
+        return
+
+    trades = exchange.fetch_my_trades(SYMBOL, since=open_trade_ts)
+
+    if not trades:
+        return
+
+    close_trades = [t for t in trades if t["side"] != open_trade_side]
+
+    if not close_trades:
+        return
+
+    close_price = safe_float(close_trades[-1]["price"])
+    fee = sum(safe_float(t.get("fee", {}).get("cost")) for t in close_trades)
+
+    if open_trade_side == "buy":
+        pnl = (close_price - open_trade_entry) * open_trade_qty
+    else:
+        pnl = (open_trade_entry - close_price) * open_trade_qty
+
+    pnl -= fee
+    result = "WIN" if pnl > 0 else "LOSS"
+
+    log_trade(
+        symbol=SYMBOL,
+        side=open_trade_side,
+        qty=open_trade_qty,
+        entry=open_trade_entry,
+        exit_price=close_price,
+        pnl=pnl,
+        result=result,
+    )
+
+    if pnl < 0:
+        daily_loss += abs(pnl)
+
+    msg = (
+        f"📊 TRADE FERMÉ\n"
+        f"Pair: {SYMBOL}\n"
+        f"Résultat: {result}\n"
+        f"PnL: {round(pnl, 2)} USDT"
+    )
+    send_telegram(msg)
+    print(msg, flush=True)
+
+    in_position = False
+    last_trade_time = time.time()
+
+    open_trade_ts = None
+    open_trade_side = None
+    open_trade_qty = None
+    open_trade_entry = None
+
+
+# =========================
+# MAIN LOOP
+# =========================
 def run():
-    global in_position, daily_loss
+    global daily_loss
 
-    print("🤖 Bot lancé (BYBIT MAINNET – STABLE)", flush=True)
-    send_telegram("🤖 Bot Bybit V5 démarré")
+    print("🤖 Bot lancé (BYBIT MAINNET – PRO V5)", flush=True)
+    send_telegram("🤖 Bot Bybit PRO V5 démarré")
+
     init_logger()
 
     try:
@@ -162,10 +196,10 @@ def run():
 
     while True:
         try:
-            reset_daily_counters()
+            reset_daily()
 
             if daily_loss >= CAPITAL * MAX_DAILY_LOSS_PCT:
-                send_telegram("🛑 Kill switch journalier – bot en pause")
+                send_telegram("🛑 Kill switch journalier activé")
                 time.sleep(3600)
                 continue
 
@@ -185,11 +219,14 @@ def run():
 
             if signal and not in_position:
                 price = df.iloc[-1].close
-                theoretical_qty = calculate_position_size(
-                    CAPITAL, RISK_PER_TRADE, STOP_LOSS_PCT, price, LEVERAGE
+
+                qty = calculate_position_size(
+                    CAPITAL,
+                    RISK_PER_TRADE,
+                    STOP_LOSS_PCT,
+                    price,
+                    LEVERAGE,
                 )
-                qty = min(theoretical_qty, get_safe_position_size(price))
-                qty = enforce_min_qty(SYMBOL, qty)
 
                 if qty > 0:
                     place_trade(signal, qty, price)
@@ -198,6 +235,7 @@ def run():
             time.sleep(300)
 
         except Exception as e:
+            print("❌ Erreur bot:", e, flush=True)
             send_telegram(f"❌ Erreur bot: {e}")
             time.sleep(60)
 
