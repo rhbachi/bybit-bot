@@ -73,6 +73,7 @@ def run():
 
             df = fetch_data()
             df = apply_indicators(df)
+print("⏳ Analyse marché (Zone2)...", flush=True)
 
             # Zone 1 : observation
             detect_zone_1(df)
