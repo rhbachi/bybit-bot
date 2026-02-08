@@ -71,6 +71,14 @@ def get_max_safe_qty(price):
     return round(qty, 4)
 
 
+def enforce_min_qty(symbol, qty):
+    if "ETH" in symbol:
+        return max(qty, 0.01)
+    if "BTC" in symbol:
+        return max(qty, 0.001)
+    return qty
+
+
 # =========================
 # VÉRIFICATION CLÔTURE
 # =========================
@@ -111,8 +119,8 @@ def check_trade_closed():
 def run():
     global in_position, trades_today
 
-    print("🤖 Zone 2 Bot démarré (V5)", flush=True)
-    send_telegram("🤖 Zone 2 Bot V5 démarré")
+    print("🤖 Zone 2 Bot démarré (V5.1)", flush=True)
+    send_telegram("🤖 Zone 2 Bot V5.1 démarré")
 
     init_logger()
 
@@ -125,7 +133,7 @@ def run():
         try:
             reset_daily()
 
-            # Cooldown après clôture uniquement
+            # Cooldown après clôture
             if last_trade_time:
                 if time.time() - last_trade_time < COOLDOWN_SECONDS:
                     time.sleep(30)
@@ -140,10 +148,10 @@ def run():
             df = fetch_data()
             df = apply_indicators(df)
 
-            # Zone 1 = observation
+            # Zone 1 : observation
             detect_zone_1(df)
 
-            # Zone 2 = exécution
+            # Zone 2 : exécution
             signal = detect_zone_2(df)
 
             if signal and not in_position:
@@ -171,9 +179,10 @@ def run():
 
                 safe_qty = get_max_safe_qty(price)
                 qty = min(theoretical_qty, safe_qty)
+                qty = enforce_min_qty(SYMBOL, qty)
 
                 if qty <= 0:
-                    send_telegram("⚠️ Zone2: capital insuffisant → trade ignoré")
+                    send_telegram("⚠️ Zone2: quantité invalide → trade ignoré")
                     time.sleep(300)
                     continue
 
