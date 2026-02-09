@@ -11,7 +11,7 @@ from config import (
     LEVERAGE,
 )
 
-from strategy_zone3 import apply_indicators, check_signal
+from strategy import apply_indicators, check_signal
 from risk import calculate_position_size
 from notifier import send_telegram
 from logger import init_logger, log_trade
