@@ -1,62 +1,38 @@
 import os
 import ccxt
-from dotenv import load_dotenv
+
+print("⚙️ CONFIG IMPORT START", flush=True)
 
 # =========================
-# LOAD ENV
+# API
 # =========================
-load_dotenv()
+API_KEY = os.getenv("BYBIT_API_KEY", "")
+API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 
-# =========================
-# API BYBIT
-# =========================
+print("🔑 API vars loaded", flush=True)
+
 exchange = ccxt.bybit({
-    "apiKey": os.getenv("BYBIT_API_KEY"),
-    "secret": os.getenv("BYBIT_API_SECRET"),
+    "apiKey": API_KEY,
+    "secret": API_SECRET,
     "enableRateLimit": True,
     "options": {
-        "defaultType": "linear",   # USDT Perpetual Futures
-        "adjustForTimeDifference": True,
+        "defaultType": "linear",
     },
 })
 
-# Charger les marchés
-exchange.load_markets()
+print("🌍 Exchange object created", flush=True)
+
+# ❌ COMMENTÉ TEMPORAIREMENT
+# exchange.load_markets()
 
 # =========================
-# PAIRS À TRADER (MULTI-PAIRES)
+# PARAMS SAFE
 # =========================
-# Dans Coolify ou .env :
-# SYMBOLS=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT
+SYMBOL = "ETH/USDT:USDT"
+TIMEFRAME = "5m"
 
-symbols_env = os.getenv("SYMBOLS", "ETH/USDT:USDT")
-
-SYMBOLS = [s.strip() for s in symbols_env.split(",") if s.strip()]
-
-# Compatibilité ancienne version (si encore utilisée)
-SYMBOL = SYMBOLS[0]
-
-# =========================
-# PARAMÈTRES GÉNÉRAUX
-# =========================
-TIMEFRAME = os.getenv("TIMEFRAME", "5m")
-
-# Capital de référence (sert uniquement au calcul du risque théorique)
-# ⚠️ Le vrai garde-fou est le wallet Futures réel
 CAPITAL = float(os.getenv("CAPITAL", "30"))
-
-# Risque par trade (ex: 0.05 = 5%)
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.05"))
-
-# Levier Futures
 LEVERAGE = int(os.getenv("LEVERAGE", "2"))
 
-# =========================
-# LOG DE DÉMARRAGE (OPTIONNEL)
-# =========================
-print("⚙️ CONFIG LOADED")
-print("Pairs:", SYMBOLS)
-print("Timeframe:", TIMEFRAME)
-print("Capital ref:", CAPITAL)
-print("Risk per trade:", RISK_PER_TRADE)
-print("Leverage:", LEVERAGE)
+print("⚙️ CONFIG IMPORT END", flush=True)
