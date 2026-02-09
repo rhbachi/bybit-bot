@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from config import (
     exchange,
-    SYMBOL,
+    SYMBOLS,
     TIMEFRAME,
     CAPITAL,
     RISK_PER_TRADE,
@@ -21,19 +21,25 @@ from logger import init_logger, log_trade
 # =========================
 RR_MULTIPLIER = 2.3
 MAX_TRADES_PER_DAY = 10
-COOLDOWN_SECONDS = 600  # 10 min après clôture
+COOLDOWN_SECONDS = 600
 
 # =========================
 # ÉTAT GLOBAL
 # =========================
-in_position = False
-trades_today = 0
+state = {}
+stats = {
+    "trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "pnl": 0.0,
+    "dd": 0.0,
+}
+
 current_day = datetime.now(timezone.utc).date()
-last_trade_time = None
 
 
 # =========================
-# UTILITAIRES
+# UTILS
 # =========================
 def safe_float(v, default=0.0):
     try:
@@ -42,33 +48,58 @@ def safe_float(v, default=0.0):
         return default
 
 
-def fetch_data():
-    ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=120)
-    return pd.DataFrame(
-        ohlcv,
-        columns=["time", "open", "high", "low", "close", "volume"]
-    )
+def init_symbol_state(symbol):
+    state[symbol] = {
+        "in_position": False,
+        "trades_today": 0,
+        "daily_loss": 0.0,
+        "last_trade_time": None,
+        "open_trade_ts": None,
+        "open_trade_side": None,
+        "open_trade_qty": None,
+        "open_trade_entry": None,
+    }
 
 
-def reset_daily():
-    global trades_today, current_day
+def reset_daily_if_needed():
+    global current_day, stats
+
     today = datetime.now(timezone.utc).date()
     if today != current_day:
-        trades_today = 0
+        send_daily_summary()
         current_day = today
-        send_telegram("🔄 Zone2 – Nouveau jour, compteur réinitialisé")
+
+        stats = {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0, "dd": 0.0}
+        for s in state.values():
+            s["trades_today"] = 0
+            s["daily_loss"] = 0.0
+
+
+def send_daily_summary():
+    msg = (
+        "📊 *RÉSUMÉ JOURNALIER – ZONE 2*\n"
+        f"Paires: {', '.join(SYMBOLS)}\n"
+        f"Trades: {stats['trades']}\n"
+        f"Wins: {stats['wins']} | Losses: {stats['losses']}\n"
+        f"PnL: {round(stats['pnl'],2)} USDT\n"
+        f"DD journalier: {round(stats['dd'],2)} USDT"
+    )
+    send_telegram(msg)
+
+
+def fetch_data(symbol):
+    ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=120)
+    return pd.DataFrame(
+        ohlcv, columns=["time", "open", "high", "low", "close", "volume"]
+    )
 
 
 def get_max_safe_qty(price):
     balance = exchange.fetch_balance()
     usdt_free = safe_float(balance.get("USDT", {}).get("free"))
-
     if usdt_free <= 5:
         return 0
-
-    max_position_value = usdt_free * LEVERAGE * 0.9
-    qty = max_position_value / price
-    return round(qty, 4)
+    return round((usdt_free * LEVERAGE * 0.9) / price, 4)
 
 
 def enforce_min_qty(symbol, qty):
@@ -79,149 +110,159 @@ def enforce_min_qty(symbol, qty):
     return qty
 
 
+def has_sufficient_margin(qty, price):
+    balance = exchange.fetch_balance()
+    usdt_free = safe_float(balance.get("USDT", {}).get("free"))
+    required = (qty * price / LEVERAGE) * 1.1
+    return usdt_free >= required
+
+
 # =========================
-# VÉRIFICATION CLÔTURE
+# TRADE CLOSE
 # =========================
-def check_trade_closed():
-    global in_position, last_trade_time
-
-    if not in_position:
+def check_trade_closed(symbol):
+    s = state[symbol]
+    if not s["in_position"]:
         return
 
-    positions = exchange.fetch_positions([SYMBOL])
-    pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
-    if not pos:
+    trades = exchange.fetch_my_trades(symbol, since=s["open_trade_ts"])
+    if not trades:
         return
 
-    contracts = safe_float(pos.get("contracts"))
-    if contracts > 0:
+    closes = [t for t in trades if t["side"] != s["open_trade_side"]]
+    if not closes:
         return
 
-    pnl = safe_float(pos.get("realizedPnl"))
-    result = "WIN ✅" if pnl > 0 else "LOSS ❌"
+    close_price = safe_float(closes[-1]["price"])
+    fee = sum(safe_float(t.get("fee", {}).get("cost")) for t in closes)
 
-    log_trade(SYMBOL, "ZONE2", 0, 0, 0, pnl, result)
+    if s["open_trade_side"] == "buy":
+        pnl = (close_price - s["open_trade_entry"]) * s["open_trade_qty"]
+    else:
+        pnl = (s["open_trade_entry"] - close_price) * s["open_trade_qty"]
+
+    pnl -= fee
+    result = "WIN" if pnl > 0 else "LOSS"
+
+    stats["trades"] += 1
+    stats["pnl"] += pnl
+    if pnl > 0:
+        stats["wins"] += 1
+    else:
+        stats["losses"] += 1
+        stats["dd"] += abs(pnl)
+
+    log_trade(
+        symbol,
+        s["open_trade_side"],
+        s["open_trade_qty"],
+        s["open_trade_entry"],
+        close_price,
+        pnl,
+        result,
+    )
 
     send_telegram(
-        f"📊 *TRADE FERMÉ (ZONE2)*\n"
-        f"Pair: {SYMBOL}\n"
+        f"📊 TRADE FERMÉ (ZONE2)\n"
+        f"Pair: {symbol}\n"
         f"Résultat: {result}\n"
         f"PnL: {round(pnl,2)} USDT"
     )
 
-    in_position = False
-    last_trade_time = time.time()
+    s["in_position"] = False
+    s["last_trade_time"] = time.time()
 
 
 # =========================
 # MAIN LOOP
 # =========================
 def run():
-    global in_position, trades_today
-
-    print("🤖 Zone 2 Bot démarré (V5.1)", flush=True)
-    send_telegram("🤖 Zone 2 Bot V5.1 démarré")
-
     init_logger()
 
-    try:
-        exchange.set_leverage(LEVERAGE, SYMBOL)
-    except Exception:
-        pass
+    for sym in SYMBOLS:
+        init_symbol_state(sym)
+
+    send_telegram("🤖 Zone 2 Bot V5.3 démarré (Multi-paires + Résumé journalier)")
 
     while True:
         try:
-            reset_daily()
+            reset_daily_if_needed()
 
-            # Cooldown après clôture
-            if last_trade_time:
-                if time.time() - last_trade_time < COOLDOWN_SECONDS:
-                    time.sleep(30)
+            for symbol in SYMBOLS:
+                s = state[symbol]
+
+                if s["in_position"]:
+                    check_trade_closed(symbol)
                     continue
 
-            if trades_today >= MAX_TRADES_PER_DAY:
-                time.sleep(900)
-                continue
+                if s["trades_today"] >= MAX_TRADES_PER_DAY:
+                    continue
 
-            print("⏳ Analyse marché (Zone2)...", flush=True)
+                if s["last_trade_time"] and time.time() - s["last_trade_time"] < COOLDOWN_SECONDS:
+                    continue
 
-            df = fetch_data()
-            df = apply_indicators(df)
+                df = fetch_data(symbol)
+                df = apply_indicators(df)
 
-            # Zone 1 : observation
-            detect_zone_1(df)
+                # Zone 1 = observation
+                detect_zone_1(df)
 
-            # Zone 2 : exécution
-            signal = detect_zone_2(df)
+                # Zone 2 = exécution
+                signal = detect_zone_2(df)
+                if not signal:
+                    continue
 
-            if signal and not in_position:
-                last = df.iloc[-1]
-                price = last.close
-
-                if signal == "long":
-                    sl = last.low
-                    sl_distance = price - sl
-                    tp = price + sl_distance * RR_MULTIPLIER
-                    side = "buy"
-                else:
-                    sl = last.high
-                    sl_distance = sl - price
-                    tp = price - sl_distance * RR_MULTIPLIER
-                    side = "sell"
+                price = df.iloc[-1].close
 
                 theoretical_qty = calculate_position_size(
-                    CAPITAL,
-                    RISK_PER_TRADE,
-                    sl_distance,
-                    price,
-                    LEVERAGE
+                    CAPITAL, RISK_PER_TRADE, abs(price - df.iloc[-1].low), price, LEVERAGE
                 )
 
-                safe_qty = get_max_safe_qty(price)
-                qty = min(theoretical_qty, safe_qty)
-                qty = enforce_min_qty(SYMBOL, qty)
+                qty = min(theoretical_qty, get_max_safe_qty(price))
+                qty = enforce_min_qty(symbol, qty)
 
-                if qty <= 0:
-                    send_telegram("⚠️ Zone2: quantité invalide → trade ignoré")
-                    time.sleep(300)
+                if qty <= 0 or not has_sufficient_margin(qty, price):
                     continue
 
+                side = "buy" if signal == "long" else "sell"
+
+                sl = df.iloc[-1].low if signal == "long" else df.iloc[-1].high
+                tp = price + (price - sl) * RR_MULTIPLIER if signal == "long" else price - (sl - price) * RR_MULTIPLIER
+
                 exchange.create_market_order(
-                    SYMBOL,
+                    symbol,
                     side,
                     qty,
                     params={
                         "stopLoss": sl,
                         "takeProfit": tp,
                         "slTriggerBy": "LastPrice",
-                        "tpTriggerBy": "LastPrice"
+                        "tpTriggerBy": "LastPrice",
                     }
                 )
 
-                in_position = True
-                trades_today += 1
+                s.update({
+                    "in_position": True,
+                    "trades_today": s["trades_today"] + 1,
+                    "open_trade_ts": exchange.milliseconds(),
+                    "open_trade_side": side,
+                    "open_trade_qty": qty,
+                    "open_trade_entry": price,
+                })
 
                 send_telegram(
-                    f"📈 *TRADE OUVERT (ZONE2)*\n"
-                    f"Pair: {SYMBOL}\n"
+                    f"📈 TRADE OUVERT (ZONE2)\n"
+                    f"Pair: {symbol}\n"
                     f"Direction: {signal.upper()}\n"
                     f"Qty: {qty}\n"
-                    f"Entry: {round(price,2)}\n"
-                    f"SL: {round(sl,2)}\n"
-                    f"TP: {round(tp,2)}\n"
-                    f"RR: {RR_MULTIPLIER}"
+                    f"Entry: {round(price,2)}"
                 )
 
-            check_trade_closed()
             time.sleep(300)
 
         except Exception as e:
-            print("❌ Zone2 Bot error:", e, flush=True)
-            send_telegram(f"❌ Zone2 Bot error: {e}")
+            send_telegram(f"❌ Zone2 erreur: {e}")
             time.sleep(60)
 
 
-# =========================
-# ENTRY POINT
-# =========================
 run()
