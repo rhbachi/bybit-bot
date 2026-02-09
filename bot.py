@@ -23,7 +23,7 @@ STOP_LOSS_PCT = 0.006
 RR_MULTIPLIER = 2.3
 MAX_TRADES_PER_DAY = 10
 MAX_DAILY_LOSS_PCT = 0.20
-COOLDOWN_SECONDS = 600
+COOLDOWN_SECONDS = 600  # 10 min après clôture
 
 # =========================
 # ÉTAT GLOBAL
@@ -44,7 +44,7 @@ open_trade_entry = None
 # =========================
 def safe_float(v, default=0.0):
     try:
-        return float(v)
+        return float(v) if v is not None else default
     except Exception:
         return default
 
@@ -60,10 +60,51 @@ def reset_daily():
 
 
 def fetch_data():
-    ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=120)
     return pd.DataFrame(
         ohlcv, columns=["time", "open", "high", "low", "close", "volume"]
     )
+
+
+def get_max_safe_qty(price):
+    """
+    Borne la taille par le balance Futures réel.
+    """
+    balance = exchange.fetch_balance()
+    usdt_free = safe_float(balance.get("USDT", {}).get("free"))
+
+    if usdt_free <= 5:
+        return 0
+
+    max_position_value = usdt_free * LEVERAGE * 0.9
+    qty = max_position_value / price
+    return round(qty, 4)
+
+
+def enforce_min_qty(symbol, qty):
+    """
+    Respecte les minQty Bybit par symbole.
+    """
+    if "ETH" in symbol:
+        return max(qty, 0.01)
+    if "BTC" in symbol:
+        return max(qty, 0.001)
+    return qty
+
+
+def has_sufficient_margin(symbol, qty, price):
+    """
+    Vérifie la marge requise AVANT d'envoyer l'ordre
+    (garde-fou final anti-110007).
+    """
+    balance = exchange.fetch_balance()
+    usdt_free = safe_float(balance.get("USDT", {}).get("free"))
+
+    # marge estimée (notional / leverage) + buffer sécurité
+    notional = qty * price
+    required_margin = (notional / LEVERAGE) * 1.1
+
+    return usdt_free >= required_margin
 
 
 # =========================
@@ -127,12 +168,10 @@ def check_trade_closed():
         return
 
     trades = exchange.fetch_my_trades(SYMBOL, since=open_trade_ts)
-
     if not trades:
         return
 
     close_trades = [t for t in trades if t["side"] != open_trade_side]
-
     if not close_trades:
         return
 
@@ -160,14 +199,12 @@ def check_trade_closed():
     if pnl < 0:
         daily_loss += abs(pnl)
 
-    msg = (
+    send_telegram(
         f"📊 TRADE FERMÉ\n"
         f"Pair: {SYMBOL}\n"
         f"Résultat: {result}\n"
         f"PnL: {round(pnl, 2)} USDT"
     )
-    send_telegram(msg)
-    print(msg, flush=True)
 
     in_position = False
     last_trade_time = time.time()
@@ -184,8 +221,8 @@ def check_trade_closed():
 def run():
     global daily_loss
 
-    print("🤖 Bot lancé (BYBIT MAINNET – PRO V5)", flush=True)
-    send_telegram("🤖 Bot Bybit PRO V5 démarré")
+    print("🤖 Bot lancé (BYBIT MAINNET – PRO V5.2)", flush=True)
+    send_telegram("🤖 Bot Bybit PRO V5.2 démarré")
 
     init_logger()
 
@@ -198,11 +235,13 @@ def run():
         try:
             reset_daily()
 
+            # Kill switch journalier
             if daily_loss >= CAPITAL * MAX_DAILY_LOSS_PCT:
                 send_telegram("🛑 Kill switch journalier activé")
                 time.sleep(3600)
                 continue
 
+            # Cooldown après clôture uniquement
             if last_trade_time and time.time() - last_trade_time < COOLDOWN_SECONDS:
                 time.sleep(30)
                 continue
@@ -220,7 +259,7 @@ def run():
             if signal and not in_position:
                 price = df.iloc[-1].close
 
-                qty = calculate_position_size(
+                theoretical_qty = calculate_position_size(
                     CAPITAL,
                     RISK_PER_TRADE,
                     STOP_LOSS_PCT,
@@ -228,16 +267,35 @@ def run():
                     LEVERAGE,
                 )
 
-                if qty > 0:
-                    place_trade(signal, qty, price)
+                safe_qty = get_max_safe_qty(price)
+                qty = min(theoretical_qty, safe_qty)
+                qty = enforce_min_qty(SYMBOL, qty)
+
+                # Garde-fous finaux
+                if qty <= 0:
+                    print("⚠️ Capital insuffisant → trade ignoré", flush=True)
+                    time.sleep(300)
+                    continue
+
+                if not has_sufficient_margin(SYMBOL, qty, price):
+                    print("⚠️ Marge insuffisante → trade ignoré", flush=True)
+                    send_telegram("⚠️ Bot1: marge insuffisante → attente")
+                    time.sleep(300)
+                    continue
+
+                place_trade(signal, qty, price)
 
             check_trade_closed()
             time.sleep(300)
 
         except Exception as e:
-            print("❌ Erreur bot:", e, flush=True)
-            send_telegram(f"❌ Erreur bot: {e}")
-            time.sleep(60)
+            if "110007" in str(e):
+                send_telegram("⚠️ Bot1: marge/capital insuffisant → attente")
+                time.sleep(300)
+            else:
+                print("❌ Erreur bot:", e, flush=True)
+                send_telegram(f"❌ Erreur bot: {e}")
+                time.sleep(60)
 
 
 run()
