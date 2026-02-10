@@ -72,11 +72,21 @@ def has_sufficient_margin(qty, price):
 
 
 def get_min_notional(symbol):
+    """
+    Bybit / ccxt peut retourner None → fallback obligatoire
+    """
     try:
         market = exchange.market(symbol)
-        return market.get("limits", {}).get("cost", {}).get("min", 5)
-    except Exception:
-        return 5
+        min_notional = market.get("limits", {}).get("cost", {}).get("min")
+
+        if min_notional is None or min_notional <= 0:
+            return 5.0
+
+        return float(min_notional)
+
+    except Exception as e:
+        print("⚠️ Erreur get_min_notional:", e, flush=True)
+        return 5.0
 
 
 def adjust_qty_to_min_notional(symbol, qty, price):
@@ -91,6 +101,7 @@ def adjust_qty_to_min_notional(symbol, qty, price):
     print(
         f"⚠️ Ajustement qty → minNotional | "
         f"Old notional={round(notional,2)} | "
+        f"MinNotional={min_notional} | "
         f"New qty={round(min_qty,6)}",
         flush=True,
     )
@@ -104,8 +115,8 @@ def adjust_qty_to_min_notional(symbol, qty, price):
 def run():
     global in_position, trades_today, last_trade_time
 
-    print("🤖 Bot Bybit V5.2.3 démarré", flush=True)
-    send_telegram("🤖 Bot Bybit V5.2.3 démarré")
+    print("🤖 Bot Bybit V5.2.4 démarré", flush=True)
+    send_telegram("🤖 Bot Bybit V5.2.4 démarré")
 
     init_logger()
 
@@ -145,7 +156,6 @@ def run():
                     LEVERAGE,
                 )
 
-                # 🔑 Correctif minNotional
                 qty = adjust_qty_to_min_notional(SYMBOL, qty, price)
 
                 if qty <= 0:
