@@ -126,7 +126,7 @@ def adjust_qty_to_min_notional(symbol, qty, price):
 
 def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
     """
-    Place les ordres Stop Loss et Take Profit conditionnels sur Bybit
+    Place les ordres Stop Loss et Take Profit conditionnels sur Bybit V5
     
     Args:
         symbol: Symbole de trading (ex: ETH/USDT:USDT)
@@ -135,114 +135,129 @@ def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
         entry_price: Prix d'entrée
         sl_price: Prix du Stop Loss
         tp_price: Prix du Take Profit
+    
+    Returns:
+        bool: True si SL/TP placés avec succès, False sinon
     """
     try:
-        # Pour Bybit, les ordres conditionnels utilisent des paramètres spécifiques
+        # Bybit V5 nécessite triggerDirection pour les ordres conditionnels
         if side == "long":
-            # Stop Loss pour position LONG
+            # Stop Loss pour LONG : vendre si prix descend
             sl_params = {
-                'stopLoss': {
-                    'triggerPrice': sl_price,
-                    'price': sl_price,
-                    'type': 'market',
-                }
+                'stopLoss': sl_price,
+                'triggerDirection': 'descending',  # Prix descend
+                'triggerBy': 'LastPrice',
+                'reduceOnly': True,
             }
             
-            # Take Profit pour position LONG
+            # Take Profit pour LONG : vendre si prix monte
             tp_params = {
-                'takeProfit': {
-                    'triggerPrice': tp_price,
-                    'price': tp_price,
-                    'type': 'market',
-                }
+                'takeProfit': tp_price,
+                'triggerDirection': 'ascending',  # Prix monte
+                'triggerBy': 'LastPrice',
+                'reduceOnly': True,
             }
             
         else:  # short
-            # Stop Loss pour position SHORT
+            # Stop Loss pour SHORT : acheter si prix monte
             sl_params = {
-                'stopLoss': {
-                    'triggerPrice': sl_price,
-                    'price': sl_price,
-                    'type': 'market',
-                }
-            }
-            
-            # Take Profit pour position SHORT
-            tp_params = {
-                'takeProfit': {
-                    'triggerPrice': tp_price,
-                    'price': tp_price,
-                    'type': 'market',
-                }
-            }
-        
-        # Bybit V5 : placer SL/TP via modify position
-        exchange.set_margin_mode('isolated', symbol)
-        exchange.edit_order(
-            id=None,
-            symbol=symbol,
-            type='market',
-            side='buy' if side == 'long' else 'sell',
-            amount=qty,
-            params={
                 'stopLoss': sl_price,
-                'takeProfit': tp_price,
-                'positionIdx': 0,  # One-way mode
+                'triggerDirection': 'ascending',  # Prix monte
+                'triggerBy': 'LastPrice',
+                'reduceOnly': True,
             }
-        )
-        
-        print(f"✅ SL/TP placés: SL={round(sl_price, 2)} | TP={round(tp_price, 2)}", flush=True)
-        return True
-        
-    except Exception as e:
-        print(f"⚠️ Erreur placement SL/TP: {e}", flush=True)
-        # Essayer méthode alternative
-        try:
-            # Utiliser les ordres conditionnels standards
-            if side == "long":
-                # Stop Loss = ordre de vente si prix descend
-                exchange.create_order(
-                    symbol,
-                    'stop_market',
-                    'sell',
-                    qty,
-                    params={'stopPrice': sl_price, 'reduceOnly': True}
-                )
-                
-                # Take Profit = ordre de vente si prix monte
-                exchange.create_order(
-                    symbol,
-                    'take_profit_market',
-                    'sell',
-                    qty,
-                    params={'stopPrice': tp_price, 'reduceOnly': True}
-                )
-            else:
-                # Stop Loss = ordre d'achat si prix monte
-                exchange.create_order(
-                    symbol,
-                    'stop_market',
-                    'buy',
-                    qty,
-                    params={'stopPrice': sl_price, 'reduceOnly': True}
-                )
-                
-                # Take Profit = ordre d'achat si prix descend
-                exchange.create_order(
-                    symbol,
-                    'take_profit_market',
-                    'buy',
-                    qty,
-                    params={'stopPrice': tp_price, 'reduceOnly': True}
-                )
             
-            print(f"✅ SL/TP placés (méthode alternative)", flush=True)
+            # Take Profit pour SHORT : acheter si prix descend
+            tp_params = {
+                'takeProfit': tp_price,
+                'triggerDirection': 'descending',  # Prix descend
+                'triggerBy': 'LastPrice',
+                'reduceOnly': True,
+            }
+        
+        # Méthode 1 : Utiliser set_trading_stop (recommandé pour Bybit V5)
+        try:
+            exchange.private_post_v5_position_trading_stop({
+                'category': 'linear',
+                'symbol': symbol.replace('/', '').replace(':USDT', ''),
+                'stopLoss': str(sl_price),
+                'takeProfit': str(tp_price),
+                'tpTriggerBy': 'LastPrice',
+                'slTriggerBy': 'LastPrice',
+                'positionIdx': 0,  # One-way mode
+            })
+            
+            print(f"✅ SL/TP placés (méthode 1): SL={round(sl_price, 2)} | TP={round(tp_price, 2)}", flush=True)
             return True
             
-        except Exception as e2:
-            print(f"❌ Échec placement SL/TP (toutes méthodes): {e2}", flush=True)
-            send_telegram(f"⚠️ ATTENTION: Trade ouvert SANS SL/TP!\nErreur: {e2}")
-            return False
+        except Exception as e1:
+            print(f"⚠️ Méthode 1 échouée: {e1}", flush=True)
+            
+            # Méthode 2 : Ordres conditionnels séparés
+            try:
+                order_side_close = 'sell' if side == 'long' else 'buy'
+                
+                # Placer Stop Loss
+                sl_order = exchange.create_order(
+                    symbol,
+                    'market',
+                    order_side_close,
+                    qty,
+                    None,
+                    params={
+                        'stopLoss': sl_price,
+                        'triggerDirection': 'descending' if side == 'long' else 'ascending',
+                        'triggerBy': 'LastPrice',
+                        'reduceOnly': True,
+                        'orderType': 'Market',
+                        'triggerPrice': sl_price,
+                    }
+                )
+                
+                print(f"✅ Stop Loss placé: {round(sl_price, 2)}", flush=True)
+                
+                # Placer Take Profit
+                tp_order = exchange.create_order(
+                    symbol,
+                    'market',
+                    order_side_close,
+                    qty,
+                    None,
+                    params={
+                        'takeProfit': tp_price,
+                        'triggerDirection': 'ascending' if side == 'long' else 'descending',
+                        'triggerBy': 'LastPrice',
+                        'reduceOnly': True,
+                        'orderType': 'Market',
+                        'triggerPrice': tp_price,
+                    }
+                )
+                
+                print(f"✅ Take Profit placé: {round(tp_price, 2)}", flush=True)
+                return True
+                
+            except Exception as e2:
+                print(f"❌ Méthode 2 échouée: {e2}", flush=True)
+                return False
+        
+    except Exception as e:
+        print(f"❌ Erreur générale placement SL/TP: {e}", flush=True)
+        return False
+
+
+def close_position_immediately(symbol, side, qty):
+    """
+    Ferme immédiatement une position si SL/TP n'ont pas pu être placés
+    """
+    try:
+        close_side = 'sell' if side == 'long' else 'buy'
+        exchange.create_market_order(symbol, close_side, qty, params={'reduceOnly': True})
+        print(f"🛑 Position fermée immédiatement (pas de SL/TP)", flush=True)
+        send_telegram(f"🛑 Position fermée par sécurité - SL/TP impossible à placer")
+        return True
+    except Exception as e:
+        print(f"❌ Impossible de fermer la position: {e}", flush=True)
+        return False
 
 
 # =========================
@@ -251,8 +266,8 @@ def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
 def run():
     global in_position, trades_today, last_trade_time, current_trade
 
-    print("🤖 Bot Bybit V6.0 IMPROVED démarré", flush=True)
-    send_telegram("🤖 Bot Bybit V6.0 IMPROVED démarré\n✅ SL/TP automatiques activés")
+    print("🤖 Bot Bybit V6.1 FIXED démarré", flush=True)
+    send_telegram("🤖 Bot Bybit V6.1 FIXED démarré\n✅ SL/TP obligatoires activés")
 
     init_logger()
 
@@ -260,7 +275,10 @@ def run():
         exchange.set_leverage(LEVERAGE, SYMBOL)
         print(f"⚙️ Leverage configuré: {LEVERAGE}x", flush=True)
     except Exception as e:
-        print(f"⚠️ Erreur set_leverage: {e}", flush=True)
+        if "110043" not in str(e):
+            print(f"⚠️ Erreur set_leverage: {e}", flush=True)
+        else:
+            print(f"⚙️ Leverage déjà à {LEVERAGE}x", flush=True)
 
     while True:
         try:
@@ -293,23 +311,21 @@ def run():
                     time.sleep(300)
                     continue
                 
-                # 2️⃣ Calculer la position
+                # 2️⃣ Utiliser le minimum entre CAPITAL configuré et solde disponible
+                effective_capital = min(CAPITAL, available_balance * 0.95)  # 95% du solde dispo
+                
+                print(f"📊 Capital effectif: {round(effective_capital, 2)} USDT (config: {CAPITAL}, dispo: {round(available_balance, 2)})", flush=True)
+                
+                # 3️⃣ Calculer la position
                 price = df.iloc[-1].close
 
                 qty = calculate_position_size(
-                    CAPITAL,
+                    effective_capital,  # Utiliser le capital effectif
                     RISK_PER_TRADE,
                     STOP_LOSS_PCT,
                     price,
                     LEVERAGE,
                 )
-
-                # Vérifier que la position ne dépasse pas le capital disponible
-                position_value = (qty * price) / LEVERAGE
-                if position_value > available_balance:
-                    print(f"⚠️ Position trop grande ({position_value} > {available_balance}), ajustement...", flush=True)
-                    qty = (available_balance * 0.95 * LEVERAGE) / price  # 95% du capital pour sécurité
-                    qty = round(qty, 4)
 
                 # Ajuster pour minNotional
                 qty = adjust_qty_to_min_notional(SYMBOL, qty, price)
@@ -319,7 +335,7 @@ def run():
                     time.sleep(300)
                     continue
 
-                # 3️⃣ Calculer SL et TP
+                # 4️⃣ Calculer SL et TP
                 if signal == "long":
                     sl_price = price * (1 - STOP_LOSS_PCT)
                     tp_price = price * (1 + (STOP_LOSS_PCT * RR_MULTIPLIER))
@@ -329,7 +345,7 @@ def run():
                     tp_price = price * (1 - (STOP_LOSS_PCT * RR_MULTIPLIER))
                     order_side = "sell"
 
-                # 4️⃣ Passer l'ordre d'entrée
+                # 5️⃣ Passer l'ordre d'entrée
                 print(f"📊 Ouverture {signal.upper()} | Qty={qty} | Prix={round(price, 2)}", flush=True)
                 
                 order = exchange.create_market_order(
@@ -338,10 +354,22 @@ def run():
                     qty,
                 )
 
-                # 5️⃣ Placer les ordres SL/TP
+                # 6️⃣ Placer les ordres SL/TP (OBLIGATOIRE)
+                print("🔒 Placement SL/TP...", flush=True)
                 sl_tp_success = place_sl_tp_orders(SYMBOL, signal, qty, price, sl_price, tp_price)
 
-                # 6️⃣ Mettre à jour l'état
+                # 7️⃣ SI SL/TP ÉCHOUENT → FERMER LA POSITION IMMÉDIATEMENT
+                if not sl_tp_success:
+                    print("🚨 SL/TP non placés → Fermeture immédiate de la position", flush=True)
+                    send_telegram(f"🚨 ALERTE CRITIQUE\nSL/TP impossible à placer\nPosition fermée par sécurité")
+                    
+                    close_position_immediately(SYMBOL, signal, qty)
+                    
+                    # Ne pas compter ce trade
+                    time.sleep(300)
+                    continue
+
+                # 8️⃣ Mettre à jour l'état (seulement si SL/TP OK)
                 in_position = True
                 trades_today += 1
                 last_trade_time = time.time()
@@ -355,7 +383,7 @@ def run():
                     "entry_time": datetime.now(timezone.utc),
                 }
 
-                # 7️⃣ Notification
+                # 9️⃣ Notification
                 msg = (
                     f"🚀 TRADE OUVERT\n"
                     f"Direction: {signal.upper()}\n"
@@ -364,7 +392,7 @@ def run():
                     f"SL: {round(sl_price, 2)} (-{STOP_LOSS_PCT*100}%)\n"
                     f"TP: {round(tp_price, 2)} (+{STOP_LOSS_PCT*RR_MULTIPLIER*100}%)\n"
                     f"Risk/Reward: 1:{RR_MULTIPLIER}\n"
-                    f"SL/TP: {'✅' if sl_tp_success else '❌ MANUEL REQUIS'}"
+                    f"SL/TP: ✅ PLACÉS ET CONFIRMÉS"
                 )
                 print(msg, flush=True)
                 send_telegram(msg)
@@ -405,7 +433,7 @@ def run():
                         f"Direction: {current_trade['side'].upper()}\n"
                         f"Entrée: {round(current_trade['entry_price'], 2)} USDT\n"
                         f"Sortie: {round(exit_price, 2)} USDT\n"
-                        f"PnL: {round(pnl, 2)} USDT ({round((pnl/CAPITAL)*100, 2)}%)\n"
+                        f"PnL: {round(pnl, 2)} USDT ({round((pnl/effective_capital)*100, 2)}%)\n"
                         f"Durée: {duration_minutes} min\n"
                         f"Trades aujourd'hui: {trades_today}/{MAX_TRADES_PER_DAY}"
                     )
