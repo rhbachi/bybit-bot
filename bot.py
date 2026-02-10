@@ -33,6 +33,15 @@ last_trade_time = None
 current_day = datetime.now(timezone.utc).date()
 
 # =========================
+# UTILS
+# =========================
+def safe_float(v, default=0.0):
+    try:
+        return float(v) if v is not None else default
+    except Exception:
+        return default
+
+
 def reset_daily():
     global trades_today, current_day
     today = datetime.now(timezone.utc).date()
@@ -42,20 +51,61 @@ def reset_daily():
         print("🔄 Nouveau jour", flush=True)
         send_telegram("🔄 Nouveau jour – compteurs réinitialisés")
 
-# =========================
+
 def fetch_data():
-    ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=120)
     return pd.DataFrame(
         ohlcv,
-        columns=["time", "open", "high", "low", "close", "volume"]
+        columns=["time", "open", "high", "low", "close", "volume"],
     )
 
+
+def has_sufficient_margin(qty, price):
+    try:
+        balance = exchange.fetch_balance()
+        usdt_free = safe_float(balance.get("USDT", {}).get("free"))
+        required = (qty * price / LEVERAGE) * 1.1
+        return usdt_free >= required
+    except Exception as e:
+        print("⚠️ Erreur check marge:", e, flush=True)
+        return False
+
+
+def get_min_notional(symbol):
+    try:
+        market = exchange.market(symbol)
+        return market.get("limits", {}).get("cost", {}).get("min", 5)
+    except Exception:
+        return 5
+
+
+def adjust_qty_to_min_notional(symbol, qty, price):
+    min_notional = get_min_notional(symbol)
+    notional = qty * price
+
+    if notional >= min_notional:
+        return qty
+
+    min_qty = min_notional / price
+
+    print(
+        f"⚠️ Ajustement qty → minNotional | "
+        f"Old notional={round(notional,2)} | "
+        f"New qty={round(min_qty,6)}",
+        flush=True,
+    )
+
+    return round(min_qty, 6)
+
+
+# =========================
+# MAIN
 # =========================
 def run():
     global in_position, trades_today, last_trade_time
 
-    print("🤖 Bot Bybit V5.2 démarré", flush=True)
-    send_telegram("🤖 Bot Bybit V5.2 démarré")
+    print("🤖 Bot Bybit V5.2.3 démarré", flush=True)
+    send_telegram("🤖 Bot Bybit V5.2.3 démarré")
 
     init_logger()
 
@@ -92,35 +142,47 @@ def run():
                     RISK_PER_TRADE,
                     STOP_LOSS_PCT,
                     price,
-                    LEVERAGE
+                    LEVERAGE,
                 )
 
-                if qty > 0:
-                    exchange.create_market_order(
-                        SYMBOL,
-                        "buy" if signal == "long" else "sell",
-                        qty
-                    )
+                # 🔑 Correctif minNotional
+                qty = adjust_qty_to_min_notional(SYMBOL, qty, price)
 
-                    in_position = True
-                    trades_today += 1
-                    last_trade_time = time.time()
+                if qty <= 0:
+                    print("⚠️ Qty invalide → trade ignoré", flush=True)
+                    time.sleep(300)
+                    continue
 
-                    msg = f"📈 TRADE OUVERT | {signal.upper()} | {SYMBOL}"
-                    print(msg, flush=True)
-                    send_telegram(msg)
+                if not has_sufficient_margin(qty, price):
+                    print("⚠️ Marge insuffisante → trade ignoré", flush=True)
+                    time.sleep(300)
+                    continue
 
-            # Vérifier clôture
+                exchange.create_market_order(
+                    SYMBOL,
+                    "buy" if signal == "long" else "sell",
+                    qty,
+                )
+
+                in_position = True
+                trades_today += 1
+                last_trade_time = time.time()
+
+                msg = f"📈 TRADE OUVERT | {signal.upper()} | {SYMBOL} | Qty={qty}"
+                print(msg, flush=True)
+                send_telegram(msg)
+
+            # ===== Vérifier clôture =====
             positions = exchange.fetch_positions([SYMBOL])
             pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
 
-            if in_position and pos and float(pos.get("contracts", 0)) == 0:
-                pnl = float(pos.get("realizedPnl", 0) or 0)
+            if in_position and pos and safe_float(pos.get("contracts")) == 0:
+                pnl = safe_float(pos.get("realizedPnl"))
                 result = "WIN" if pnl > 0 else "LOSS"
 
                 log_trade(SYMBOL, result, 0, 0, 0, pnl, result)
 
-                msg = f"📊 TRADE FERMÉ | {result} | PnL={pnl}"
+                msg = f"📊 TRADE FERMÉ | {result} | PnL={round(pnl,2)} USDT"
                 print(msg, flush=True)
                 send_telegram(msg)
 
@@ -133,5 +195,5 @@ def run():
             send_telegram(f"❌ Erreur bot: {e}")
             time.sleep(60)
 
-# =========================
+
 run()
