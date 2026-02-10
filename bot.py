@@ -60,17 +60,6 @@ def fetch_data():
     )
 
 
-def has_sufficient_margin(qty, price):
-    try:
-        balance = exchange.fetch_balance()
-        usdt_free = safe_float(balance.get("USDT", {}).get("free"))
-        required = (qty * price / LEVERAGE) * 1.1
-        return usdt_free >= required
-    except Exception as e:
-        print("⚠️ Erreur check marge:", e, flush=True)
-        return False
-
-
 def get_min_notional(symbol):
     """
     Bybit / ccxt peut retourner None → fallback obligatoire
@@ -115,8 +104,8 @@ def adjust_qty_to_min_notional(symbol, qty, price):
 def run():
     global in_position, trades_today, last_trade_time
 
-    print("🤖 Bot Bybit V5.2.4 démarré", flush=True)
-    send_telegram("🤖 Bot Bybit V5.2.4 démarré")
+    print("🤖 Bot Bybit V5.2.5 démarré", flush=True)
+    send_telegram("🤖 Bot Bybit V5.2.5 démarré")
 
     init_logger()
 
@@ -156,15 +145,11 @@ def run():
                     LEVERAGE,
                 )
 
+                # 🔑 Correctif minNotional (SEUL garde-fou)
                 qty = adjust_qty_to_min_notional(SYMBOL, qty, price)
 
                 if qty <= 0:
                     print("⚠️ Qty invalide → trade ignoré", flush=True)
-                    time.sleep(300)
-                    continue
-
-                if not has_sufficient_margin(qty, price):
-                    print("⚠️ Marge insuffisante → trade ignoré", flush=True)
                     time.sleep(300)
                     continue
 
