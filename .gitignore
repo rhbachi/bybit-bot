@@ -1,0 +1,24 @@
+﻿# Secrets
+.env
+*.log
+trades.csv
+trades_backup_*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
