@@ -1,128 +1,104 @@
 """
-Module de gestion du risque amélioré
-Calcul de position size avec validations de sécurité
+Module de gestion du risque avec calcul correct du leverage
 """
-
 
 def calculate_position_size(capital, risk_pct, stop_loss_pct, price, leverage):
     """
-    Calcule la taille de position optimale en fonction du risque
+    Calcule la taille de position en tenant compte du leverage
     
     Args:
-        capital: Capital total disponible (USDT)
-        risk_pct: Pourcentage du capital à risquer par trade (ex: 0.05 = 5%)
-        stop_loss_pct: Pourcentage de stop loss (ex: 0.006 = 0.6%)
+        capital: Capital alloué au bot (USDT)
+        risk_pct: Pourcentage de risque par trade (ex: 0.03 = 3%)
+        stop_loss_pct: Distance du stop loss en % (ex: 0.006 = 0.6%)
         price: Prix actuel de l'asset
-        leverage: Levier utilisé (ex: 2 = 2x)
+        leverage: Leverage utilisé (ex: 2, 5, 10)
     
     Returns:
-        float: Quantité à trader (arrondie à 4 décimales)
+        float: Quantité à trader (en coins)
     
     Exemple:
-        Capital = 30 USDT
-        Risk = 5% = 1.5 USDT
-        Stop Loss = 0.6%
+        capital = 15 USDT
+        risk_pct = 0.03 (3%)
+        stop_loss_pct = 0.006 (0.6%)
+        price = 1947 USDT
+        leverage = 2
         
-        Position value = 1.5 / 0.006 = 250 USDT
-        Avec leverage 2x → Quantity = (250 * 2) / price
+        → Position max (capital × leverage) = 30 USDT
+        → Risque accepté = 0.45 USDT (3% de 15)
+        → Position basée sur risque = 75 USDT (trop grand!)
+        → Position finale = MIN(30, 75) = 30 USDT
+        → Qty = 30 / 1947 = 0.0154 ETH
     """
-    # Validations d'entrée
-    if capital <= 0:
-        print("⚠️ Capital invalide:", capital, flush=True)
-        return 0
     
-    if risk_pct <= 0 or risk_pct > 1:
-        print("⚠️ Risk percentage invalide:", risk_pct, flush=True)
-        return 0
-    
-    if stop_loss_pct <= 0 or stop_loss_pct > 1:
-        print("⚠️ Stop loss percentage invalide:", stop_loss_pct, flush=True)
-        return 0
-    
-    if price <= 0:
-        print("⚠️ Prix invalide:", price, flush=True)
-        return 0
-    
-    if leverage < 1 or leverage > 100:
-        print("⚠️ Leverage invalide:", leverage, flush=True)
-        return 0
-    
-    # Calcul du montant à risquer
+    # Montant qu'on est prêt à risquer
     risk_amount = capital * risk_pct
     
-    # Calcul de la valeur de position nécessaire
-    # Pour perdre risk_amount avec un SL de stop_loss_pct, il faut:
-    # position_value * stop_loss_pct = risk_amount
-    position_value = risk_amount / stop_loss_pct
+    # Position maximale avec le leverage
+    max_position_usdt = capital * leverage
     
-    # Avec leverage, on peut contrôler une position plus grande
-    # Quantity = (position_value * leverage) / price
-    quantity = (position_value * leverage) / price
+    # Position basée sur le risque et le stop loss
+    # Si on risque 0.45 USDT avec un SL de 0.6%, notre position peut être :
+    risk_based_position = risk_amount / stop_loss_pct
     
-    # Arrondir à 4 décimales (standard crypto)
-    quantity = round(quantity, 4)
+    # Prendre le MINIMUM entre les deux pour ne jamais dépasser le capital
+    actual_position_usdt = min(max_position_usdt, risk_based_position)
     
-    # Validation finale
-    if quantity <= 0:
-        print("⚠️ Quantité calculée invalide:", quantity, flush=True)
-        return 0
+    # Convertir en quantité de coins
+    qty = actual_position_usdt / price
     
-    # Vérification que la position ne dépasse pas le capital
-    # La marge requise = (quantity * price) / leverage
-    required_margin = (quantity * price) / leverage
-    
-    if required_margin > capital:
-        print(
-            f"⚠️ Position trop grande! "
-            f"Marge requise: {round(required_margin, 2)} USDT > "
-            f"Capital: {capital} USDT",
-            flush=True
-        )
-        # Ajuster la quantité pour correspondre au capital disponible
-        quantity = (capital * 0.95 * leverage) / price  # 95% pour marge de sécurité
-        quantity = round(quantity, 4)
+    # Arrondir à 4 décimales
+    qty = round(qty, 4)
     
     print(
-        f"📊 Position calculée: "
-        f"Qty={quantity} | "
-        f"Valeur={round(quantity * price, 2)} USDT | "
-        f"Marge={round(required_margin, 2)} USDT | "
-        f"Risque={round(risk_amount, 2)} USDT ({round(risk_pct*100, 1)}%)",
+        f"📊 Calcul position: "
+        f"Capital={capital} | "
+        f"Risk={risk_pct*100}% ({round(risk_amount,2)} USDT) | "
+        f"Leverage={leverage}x | "
+        f"Max position={round(max_position_usdt,2)} USDT | "
+        f"Risk-based position={round(risk_based_position,2)} USDT | "
+        f"Actual position={round(actual_position_usdt,2)} USDT | "
+        f"Qty={qty}",
         flush=True
     )
     
-    return quantity
+    return qty
 
 
-def validate_position_size(qty, price, capital, leverage, min_notional=5.0):
+def validate_position_size(symbol, qty, price, capital, leverage):
     """
-    Valide qu'une taille de position respecte toutes les contraintes
+    Valide qu'une position ne dépasse pas le capital disponible
     
     Args:
-        qty: Quantité à trader
+        symbol: Symbole du trade
+        qty: Quantité calculée
         price: Prix actuel
         capital: Capital disponible
-        leverage: Levier
-        min_notional: Valeur minimale de trade (Bybit = 5 USDT)
+        leverage: Leverage utilisé
     
     Returns:
-        tuple: (is_valid: bool, error_message: str)
+        bool: True si la position est valide
     """
-    # Vérifier notionnel minimum
     notional = qty * price
-    if notional < min_notional:
-        return False, f"Notionnel trop faible: {round(notional, 2)} < {min_notional} USDT"
+    margin_required = notional / leverage
     
-    # Vérifier marge disponible
-    required_margin = (qty * price) / leverage
-    if required_margin > capital:
-        return False, f"Marge insuffisante: {round(required_margin, 2)} > {capital} USDT"
+    if margin_required > capital:
+        print(
+            f"⚠️ Position invalide: "
+            f"Marge requise={round(margin_required,2)} > "
+            f"Capital={capital}",
+            flush=True
+        )
+        return False
     
-    # Vérifier quantité positive
-    if qty <= 0:
-        return False, "Quantité invalide (<= 0)"
+    print(
+        f"✅ Position valide: "
+        f"Notional={round(notional,2)} | "
+        f"Marge={round(margin_required,2)} | "
+        f"Capital={capital}",
+        flush=True
+    )
     
-    return True, "OK"
+    return True
 
 
 def calculate_sl_tp_prices(entry_price, side, stop_loss_pct, rr_multiplier):
@@ -132,11 +108,11 @@ def calculate_sl_tp_prices(entry_price, side, stop_loss_pct, rr_multiplier):
     Args:
         entry_price: Prix d'entrée
         side: 'long' ou 'short'
-        stop_loss_pct: Pourcentage de stop loss (ex: 0.006 = 0.6%)
-        rr_multiplier: Ratio Risk/Reward (ex: 2.3 = 1:2.3)
+        stop_loss_pct: Distance du SL en % (ex: 0.006 = 0.6%)
+        rr_multiplier: Ratio Risk/Reward (ex: 2.3)
     
     Returns:
-        tuple: (sl_price: float, tp_price: float)
+        tuple: (sl_price, tp_price)
     """
     if side == "long":
         sl_price = entry_price * (1 - stop_loss_pct)
@@ -159,16 +135,16 @@ def calculate_risk_reward_ratio(entry_price, sl_price, tp_price, side):
         side: 'long' ou 'short'
     
     Returns:
-        float: Ratio R:R (ex: 2.5 pour 1:2.5)
+        float: Ratio R:R
     """
     if side == "long":
         risk = entry_price - sl_price
         reward = tp_price - entry_price
-    else:
+    else:  # short
         risk = sl_price - entry_price
         reward = entry_price - tp_price
     
-    if risk <= 0:
+    if risk == 0:
         return 0
     
     rr_ratio = reward / risk
