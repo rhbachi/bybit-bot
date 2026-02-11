@@ -14,7 +14,7 @@ from logger import init_logger, log_trade
 STOP_LOSS_PCT = 0.006
 RR_MULTIPLIER = 2.0
 MAX_TRADES_PER_DAY = 8
-COOLDOWN_SECONDS = 900  # 15 min (plus long que bot principal)
+COOLDOWN_SECONDS = 900
 
 # =========================
 # ÉTAT
@@ -24,7 +24,6 @@ trades_today = 0
 last_trade_time = None
 current_day = datetime.now(timezone.utc).date()
 
-# Variables pour tracker le trade en cours
 current_trade = {
     "entry_price": 0,
     "side": None,
@@ -62,7 +61,6 @@ def fetch_data():
 
 
 def get_available_balance():
-    """Récupère le solde USDT disponible"""
     try:
         balance = exchange.fetch_balance()
         usdt_balance = balance.get('USDT', {})
@@ -75,7 +73,6 @@ def get_available_balance():
 
 
 def get_min_notional(symbol):
-    """Récupère le notionnel minimum pour Bybit"""
     try:
         market = exchange.market(symbol)
         min_notional = market.get("limits", {}).get("cost", {}).get("min")
@@ -88,7 +85,6 @@ def get_min_notional(symbol):
 
 
 def adjust_qty_to_min_notional(symbol, qty, price):
-    """Ajuste la quantité pour respecter le notionnel minimum"""
     min_notional = get_min_notional(symbol)
     notional = qty * price
 
@@ -106,51 +102,86 @@ def adjust_qty_to_min_notional(symbol, qty, price):
 
 
 def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
-    """Place les ordres Stop Loss et Take Profit"""
+    """Place SL/TP avec triggerDirection (Bybit V5)"""
     try:
-        if side == "long":
-            # Stop Loss = vente si prix descend
-            exchange.create_order(
-                symbol,
-                'stop_market',
-                'sell',
-                qty,
-                params={'stopPrice': sl_price, 'reduceOnly': True}
-            )
+        # Méthode 1 : trading_stop endpoint
+        try:
+            exchange.private_post_v5_position_trading_stop({
+                'category': 'linear',
+                'symbol': symbol.replace('/', '').replace(':USDT', ''),
+                'stopLoss': str(sl_price),
+                'takeProfit': str(tp_price),
+                'tpTriggerBy': 'LastPrice',
+                'slTriggerBy': 'LastPrice',
+                'positionIdx': 0,
+            })
             
-            # Take Profit = vente si prix monte
-            exchange.create_order(
-                symbol,
-                'take_profit_market',
-                'sell',
-                qty,
-                params={'stopPrice': tp_price, 'reduceOnly': True}
-            )
-        else:
-            # Stop Loss = achat si prix monte
-            exchange.create_order(
-                symbol,
-                'stop_market',
-                'buy',
-                qty,
-                params={'stopPrice': sl_price, 'reduceOnly': True}
-            )
+            print(f"✅ Zone2 - SL/TP placés: SL={round(sl_price, 2)} | TP={round(tp_price, 2)}", flush=True)
+            return True
             
-            # Take Profit = achat si prix descend
-            exchange.create_order(
-                symbol,
-                'take_profit_market',
-                'buy',
-                qty,
-                params={'stopPrice': tp_price, 'reduceOnly': True}
-            )
-        
-        print(f"✅ Zone2 - SL/TP placés: SL={round(sl_price, 2)} | TP={round(tp_price, 2)}", flush=True)
-        return True
+        except Exception as e1:
+            print(f"⚠️ Zone2 - Méthode 1 échouée: {e1}", flush=True)
+            
+            # Méthode 2 : Ordres conditionnels avec triggerDirection
+            try:
+                order_side_close = 'sell' if side == 'long' else 'buy'
+                
+                # Stop Loss
+                exchange.create_order(
+                    symbol,
+                    'market',
+                    order_side_close,
+                    qty,
+                    None,
+                    params={
+                        'stopLoss': sl_price,
+                        'triggerDirection': 'descending' if side == 'long' else 'ascending',
+                        'triggerBy': 'LastPrice',
+                        'reduceOnly': True,
+                        'orderType': 'Market',
+                        'triggerPrice': sl_price,
+                    }
+                )
+                
+                # Take Profit
+                exchange.create_order(
+                    symbol,
+                    'market',
+                    order_side_close,
+                    qty,
+                    None,
+                    params={
+                        'takeProfit': tp_price,
+                        'triggerDirection': 'ascending' if side == 'long' else 'descending',
+                        'triggerBy': 'LastPrice',
+                        'reduceOnly': True,
+                        'orderType': 'Market',
+                        'triggerPrice': tp_price,
+                    }
+                )
+                
+                print(f"✅ Zone2 - SL/TP placés (méthode 2)", flush=True)
+                return True
+                
+            except Exception as e2:
+                print(f"❌ Zone2 - Méthode 2 échouée: {e2}", flush=True)
+                return False
         
     except Exception as e:
-        print(f"❌ Zone2 - Échec placement SL/TP: {e}", flush=True)
-        send_telegram(f"⚠️ ZONE2 - Trade ouvert SANS SL/TP!\nErreur: {e}")
+        print(f"❌ Zone2 - Erreur SL/TP: {e}", flush=True)
+        return False
+
+
+def close_position_immediately(symbol, side, qty):
+    """Ferme immédiatement si SL/TP impossibles"""
+    try:
+        close_side = 'sell' if side == 'long' else 'buy'
+        exchange.create_market_order(symbol, close_side, qty, params={'reduceOnly': True})
+        print(f"🛑 Zone2 - Position fermée (pas de SL/TP)", flush=True)
+        send_telegram(f"🛑 ZONE2 - Position fermée par sécurité")
+        return True
+    except Exception as e:
+        print(f"❌ Zone2 - Impossible de fermer: {e}", flush=True)
         return False
 
 
@@ -160,8 +191,8 @@ def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
 def run():
     global in_position, trades_today, last_trade_time, current_trade
 
-    print("🤖 Zone2 Bot V6.0 IMPROVED démarré", flush=True)
-    send_telegram("🤖 Zone2 Bot V6.0 IMPROVED démarré\n✅ Stratégie Mean Reversion activée")
+    print("🤖 Zone2 Bot V6.1 FIXED démarré", flush=True)
+    send_telegram("🤖 Zone2 Bot V6.1 FIXED démarré\n✅ SL/TP obligatoires activés")
 
     init_logger()
 
@@ -169,7 +200,10 @@ def run():
         exchange.set_leverage(LEVERAGE, SYMBOL)
         print(f"⚙️ Zone2 - Leverage: {LEVERAGE}x", flush=True)
     except Exception as e:
-        print(f"⚠️ Zone2 - Erreur set_leverage: {e}", flush=True)
+        if "110043" not in str(e):
+            print(f"⚠️ Zone2 - Erreur set_leverage: {e}", flush=True)
+        else:
+            print(f"⚙️ Zone2 - Leverage déjà à {LEVERAGE}x", flush=True)
 
     while True:
         try:
@@ -191,35 +225,31 @@ def run():
             df = apply_indicators(df)
             signal = check_signal(df)
 
-            # ===== OUVERTURE DE POSITION =====
+            # ===== OUVERTURE =====
             if signal and not in_position:
-                # 1️⃣ Vérifier le solde
+                # Vérifier solde
                 available_balance = get_available_balance()
                 
                 if available_balance < 5:
                     print("❌ Zone2 - Solde insuffisant", flush=True)
-                    send_telegram(f"⚠️ Zone2 - Solde insuffisant: {available_balance} USDT")
+                    send_telegram(f"⚠️ ZONE2 - Solde insuffisant: {available_balance} USDT")
                     time.sleep(300)
                     continue
                 
-                # 2️⃣ Calculer la position
+                # Capital effectif
+                effective_capital = min(CAPITAL, available_balance * 0.95)
+                print(f"📊 Zone2 - Capital effectif: {round(effective_capital, 2)} USDT", flush=True)
+                
                 price = df.iloc[-1].close
 
                 qty = calculate_position_size(
-                    CAPITAL,
+                    effective_capital,
                     RISK_PER_TRADE,
                     STOP_LOSS_PCT,
                     price,
                     LEVERAGE
                 )
 
-                # Vérifier que la position ne dépasse pas le capital
-                position_value = (qty * price) / LEVERAGE
-                if position_value > available_balance:
-                    qty = (available_balance * 0.95 * LEVERAGE) / price
-                    qty = round(qty, 4)
-
-                # Ajuster pour minNotional
                 qty = adjust_qty_to_min_notional(SYMBOL, qty, price)
 
                 if qty <= 0:
@@ -227,7 +257,7 @@ def run():
                     time.sleep(300)
                     continue
 
-                # 3️⃣ Calculer SL et TP
+                # Calculer SL/TP
                 if signal == "long":
                     sl_price = price * (1 - STOP_LOSS_PCT)
                     tp_price = price * (1 + (STOP_LOSS_PCT * RR_MULTIPLIER))
@@ -237,7 +267,7 @@ def run():
                     tp_price = price * (1 - (STOP_LOSS_PCT * RR_MULTIPLIER))
                     order_side = "sell"
 
-                # 4️⃣ Passer l'ordre
+                # Passer ordre
                 print(f"📊 Zone2 - Ouverture {signal.upper()} | Qty={qty}", flush=True)
                 
                 order = exchange.create_market_order(
@@ -246,10 +276,20 @@ def run():
                     qty
                 )
 
-                # 5️⃣ Placer SL/TP
+                # Placer SL/TP (OBLIGATOIRE)
+                print("🔒 Zone2 - Placement SL/TP...", flush=True)
                 sl_tp_success = place_sl_tp_orders(SYMBOL, signal, qty, price, sl_price, tp_price)
 
-                # 6️⃣ Mettre à jour l'état
+                # SI ÉCHEC → FERMER
+                if not sl_tp_success:
+                    print("🚨 Zone2 - SL/TP impossible → Fermeture immédiate", flush=True)
+                    send_telegram(f"🚨 ZONE2 ALERTE\nSL/TP impossible\nPosition fermée par sécurité")
+                    
+                    close_position_immediately(SYMBOL, signal, qty)
+                    time.sleep(300)
+                    continue
+
+                # Mettre à jour état (seulement si SL/TP OK)
                 in_position = True
                 trades_today += 1
                 last_trade_time = time.time()
@@ -263,7 +303,7 @@ def run():
                     "entry_time": datetime.now(timezone.utc),
                 }
 
-                # 7️⃣ Notification
+                # Notification
                 msg = (
                     f"🎯 ZONE2 TRADE OUVERT\n"
                     f"Type: Mean Reversion\n"
@@ -273,7 +313,7 @@ def run():
                     f"SL: {round(sl_price, 2)}\n"
                     f"TP: {round(tp_price, 2)}\n"
                     f"R:R = 1:{RR_MULTIPLIER}\n"
-                    f"SL/TP: {'✅' if sl_tp_success else '❌'}"
+                    f"SL/TP: ✅ PLACÉS ET CONFIRMÉS"
                 )
                 print(msg, flush=True)
                 send_telegram(msg)
@@ -288,7 +328,6 @@ def run():
                     result = "WIN" if pnl > 0 else "LOSS"
                     exit_price = current_trade["tp_price"] if pnl > 0 else current_trade["sl_price"]
 
-                    # Logger
                     log_trade(
                         SYMBOL,
                         current_trade["side"],
@@ -299,11 +338,9 @@ def run():
                         result
                     )
 
-                    # Durée
                     duration = datetime.now(timezone.utc) - current_trade["entry_time"]
                     duration_minutes = int(duration.total_seconds() / 60)
 
-                    # Notification
                     msg = (
                         f"{'🟢 WIN' if pnl > 0 else '🔴 LOSS'} - ZONE2 FERMÉ\n"
                         f"Type: Mean Reversion\n"
@@ -317,7 +354,6 @@ def run():
                     print(msg, flush=True)
                     send_telegram(msg)
 
-                    # Reset
                     in_position = False
                     current_trade = {
                         "entry_price": 0,
