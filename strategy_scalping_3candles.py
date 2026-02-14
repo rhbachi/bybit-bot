@@ -57,12 +57,12 @@ def detect_trend_5m(df_5m):
     Conditions HAUSSIÈRE :
     - EMA20 > EMA50
     - Close > EMA20
-    - 2 dernières bougies haussières
+    - 2 dernières bougies haussières (pas de dojis)
     
     Conditions BAISSIÈRE :
     - EMA20 < EMA50
     - Close < EMA20
-    - 2 dernières bougies baissières
+    - 2 dernières bougies baissières (pas de dojis)
     
     Returns:
         'bullish', 'bearish', ou None
@@ -75,6 +75,16 @@ def detect_trend_5m(df_5m):
     
     # Vérifier que les EMA sont calculées
     if pd.isna(last['ema20']) or pd.isna(last['ema50']):
+        return None
+    
+    # Filtre anti-doji : vérifier la taille du corps (0.2% minimum)
+    MIN_BODY_PCT = 0.002
+    
+    prev_body_pct = abs(prev['close'] - prev['open']) / prev['open']
+    last_body_pct = abs(last['close'] - last['open']) / last['open']
+    
+    # Ignorer si une des bougies est un doji
+    if prev_body_pct < MIN_BODY_PCT or last_body_pct < MIN_BODY_PCT:
         return None
     
     # Tendance HAUSSIÈRE
@@ -104,6 +114,7 @@ def check_entry_pattern_1m(df_1m, trend):
     
     Pattern :
     - 2 bougies consécutives dans le sens de la tendance
+    - PAS de dojis (corps minimum 0.2%)
     - Entrée à l'ouverture de la 3ème bougie
     
     Args:
@@ -118,6 +129,16 @@ def check_entry_pattern_1m(df_1m, trend):
     
     prev_2 = df_1m.iloc[-2]
     prev_1 = df_1m.iloc[-1]
+    
+    # Filtre anti-doji : vérifier la taille du corps (0.2% minimum)
+    MIN_BODY_PCT = 0.002
+    
+    prev_2_body_pct = abs(prev_2['close'] - prev_2['open']) / prev_2['open']
+    prev_1_body_pct = abs(prev_1['close'] - prev_1['open']) / prev_1['open']
+    
+    # Ignorer si une des bougies est un doji
+    if prev_2_body_pct < MIN_BODY_PCT or prev_1_body_pct < MIN_BODY_PCT:
+        return None
     
     if trend == 'bullish':
         # 2 bougies haussières consécutives
@@ -144,7 +165,7 @@ def check_exit_conditions(entry_price, current_price, side, candles_in_position)
     
     Sortie si :
     1. Fin de la 3ème bougie (candles_in_position >= 3)
-    2. Profit >= 2%
+    2. Profit >= 3%
     
     Args:
         entry_price: Prix d'entrée
@@ -159,13 +180,13 @@ def check_exit_conditions(entry_price, current_price, side, candles_in_position)
     if candles_in_position >= 3:
         return True
     
-    # Condition 2 : Profit >= 2%
+    # Condition 2 : Profit >= 3%
     if side == 'long':
         profit_pct = (current_price - entry_price) / entry_price
     else:  # short
         profit_pct = (entry_price - current_price) / entry_price
     
-    if profit_pct >= 0.02:  # 2%
+    if profit_pct >= 0.03:  # 3%
         return True
     
     return False
