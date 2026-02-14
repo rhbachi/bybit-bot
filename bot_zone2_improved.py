@@ -258,13 +258,28 @@ def run():
                     continue
 
                 # Calculer SL/TP
+                # STRATÉGIE MEAN REVERSION : On inverse SL et TP !
+                # Le prix devrait revenir vers l'EMA (ancien SL devient TP)
+                # Si ça continue dans la direction, on coupe (ancien TP devient SL)
                 if signal == "long":
-                    sl_price = price * (1 - STOP_LOSS_PCT)
-                    tp_price = price * (1 + (STOP_LOSS_PCT * RR_MULTIPLIER))
+                    # Prix calculé "SL" = objectif de retour = TP réel
+                    calculated_sl = price * (1 - STOP_LOSS_PCT)
+                    # Prix calculé "TP" = protection si continue = SL réel
+                    calculated_tp = price * (1 + (STOP_LOSS_PCT * RR_MULTIPLIER))
+                    
+                    # INVERSION : SL ↔ TP
+                    sl_price = calculated_tp  # Protection si ça monte
+                    tp_price = calculated_sl  # Objectif de retour vers le bas
                     order_side = "buy"
                 else:
-                    sl_price = price * (1 + STOP_LOSS_PCT)
-                    tp_price = price * (1 - (STOP_LOSS_PCT * RR_MULTIPLIER))
+                    # Prix calculé "SL" = objectif de retour = TP réel
+                    calculated_sl = price * (1 + STOP_LOSS_PCT)
+                    # Prix calculé "TP" = protection si continue = SL réel
+                    calculated_tp = price * (1 - (STOP_LOSS_PCT * RR_MULTIPLIER))
+                    
+                    # INVERSION : SL ↔ TP
+                    sl_price = calculated_tp  # Protection si ça baisse
+                    tp_price = calculated_sl  # Objectif de retour vers le haut
                     order_side = "sell"
 
                 # Passer ordre
