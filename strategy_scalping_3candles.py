@@ -6,7 +6,6 @@ Sortie : fin 3ème bougie OU profit >= 2%
 """
 
 import pandas as pd
-import pandas_ta as ta
 
 # =========================
 # ÉTAT GLOBAL
@@ -44,9 +43,9 @@ def apply_indicators_5m(df_5m):
     """
     df = df_5m.copy()
     
-    # EMA20 et EMA50
-    df['ema20'] = ta.ema(df['close'], length=20)
-    df['ema50'] = ta.ema(df['close'], length=50)
+    # EMA20 et EMA50 (calcul manuel avec pandas natif)
+    df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
     return df
 
