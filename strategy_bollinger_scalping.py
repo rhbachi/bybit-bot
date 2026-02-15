@@ -99,8 +99,8 @@ def check_entry_pattern_1m(df_1m, band_signal):
     """
     Vérifie le pattern d'entrée sur le timeframe 1 minute
     
-    Pattern :
-    - 2 bougies consécutives dans le sens du rebond
+    Pattern MODIFIÉ :
+    - 1 bougie dans le sens du rebond (au lieu de 2)
     - PAS de dojis (corps minimum 0.2%)
     
     Args:
@@ -110,33 +110,32 @@ def check_entry_pattern_1m(df_1m, band_signal):
     Returns:
         'long', 'short', ou None
     """
-    if len(df_1m) < 2 or band_signal is None:
+    if len(df_1m) < 1 or band_signal is None:
         return None
     
-    prev_2 = df_1m.iloc[-2]
-    prev_1 = df_1m.iloc[-1]
+    current = df_1m.iloc[-1]
     
-    # Filtre anti-doji
-    prev_2_body_pct = abs(prev_2['close'] - prev_2['open']) / prev_2['open']
-    prev_1_body_pct = abs(prev_1['close'] - prev_1['open']) / prev_1['open']
+    # Filtre anti-doji sur la bougie actuelle
+    current_body_pct = abs(current['close'] - current['open']) / current['open']
     
-    if prev_2_body_pct < MIN_BODY_PCT or prev_1_body_pct < MIN_BODY_PCT:
+    if current_body_pct < MIN_BODY_PCT:
+        print(f"🔍 Bougie rejetée (doji): corps={current_body_pct:.4f} < {MIN_BODY_PCT}", flush=True)
         return None
     
     # Signal LONG (rebond bande inférieure)
     if band_signal == 'lower_bounce':
-        candle_1_bullish = prev_2['close'] > prev_2['open']
-        candle_2_bullish = prev_1['close'] > prev_1['open']
+        candle_bullish = current['close'] > current['open']
         
-        if candle_1_bullish and candle_2_bullish:
+        if candle_bullish:
+            print(f"✅ Pattern 1m VALIDÉ: 1 bougie haussière (corps={current_body_pct:.4f})", flush=True)
             return 'long'
     
     # Signal SHORT (rebond bande supérieure)
     elif band_signal == 'upper_bounce':
-        candle_1_bearish = prev_2['close'] < prev_2['open']
-        candle_2_bearish = prev_1['close'] < prev_1['open']
+        candle_bearish = current['close'] < current['open']
         
-        if candle_1_bearish and candle_2_bearish:
+        if candle_bearish:
+            print(f"✅ Pattern 1m VALIDÉ: 1 bougie baissière (corps={current_body_pct:.4f})", flush=True)
             return 'short'
     
     return None
