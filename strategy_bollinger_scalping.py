@@ -14,7 +14,7 @@ import pandas as pd
 # =========================
 BB_PERIOD = 20      # Période de la moyenne mobile
 BB_STD_DEV = 2.0    # Nombre d'écarts-types
-MIN_BODY_PCT = 0.002  # Filtre anti-doji (0.2%)
+MIN_BODY_PCT = 0.0005  # Filtre anti-doji (0.05% au lieu de 0.2%)
 
 # Seuils de détection
 BAND_TOUCH_THRESHOLD = 0.002  # 0.2% au-delà de la bande

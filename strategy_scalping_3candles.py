@@ -77,8 +77,8 @@ def detect_trend_5m(df_5m):
     if pd.isna(last['ema20']) or pd.isna(last['ema50']):
         return None
     
-    # Filtre anti-doji : vérifier la taille du corps (0.2% minimum)
-    MIN_BODY_PCT = 0.002
+    # Filtre anti-doji : vérifier la taille du corps (0.05% minimum au lieu de 0.2%)
+    MIN_BODY_PCT = 0.0005
     
     prev_body_pct = abs(prev['close'] - prev['open']) / prev['open']
     last_body_pct = abs(last['close'] - last['open']) / last['open']
@@ -130,8 +130,8 @@ def check_entry_pattern_1m(df_1m, trend):
     prev_2 = df_1m.iloc[-2]
     prev_1 = df_1m.iloc[-1]
     
-    # Filtre anti-doji : vérifier la taille du corps (0.2% minimum)
-    MIN_BODY_PCT = 0.002
+    # Filtre anti-doji : vérifier la taille du corps (0.05% minimum au lieu de 0.2%)
+    MIN_BODY_PCT = 0.0005
     
     prev_2_body_pct = abs(prev_2['close'] - prev_2['open']) / prev_2['open']
     prev_1_body_pct = abs(prev_1['close'] - prev_1['open']) / prev_1['open']
