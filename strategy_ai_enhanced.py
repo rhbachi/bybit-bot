@@ -1,86 +1,17 @@
 """
 Stratégie avancée avec EMA, MACD, RSI, Stochastic, Bollinger Bands
 et OTE (Optimal Trade Entry) sur retracements Fibonacci
+Version avec logs de débogage
 """
-import os
 import pandas as pd
 import numpy as np
 from datetime import datetime
-
-# Ajouter des logs de débogage
+import os
 import logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-def debug_check_signal(df):
-    """Version debug de check_signal qui explique pourquoi pas de signal"""
-    
-    if len(df) < 50:
-        logger.info("❌ Pas assez de données: %d/50 bougies", len(df))
-        return None
-    
-    # Appliquer indicateurs
-    df = apply_indicators(df)
-    
-    # Vérifier tendance
-    trend = detect_trend(df)
-    if not trend:
-        logger.info("❌ Pas de tendance claire (EMA20/50)")
-        # Afficher les valeurs EMA
-        last = df.iloc[-1]
-        logger.info("   EMA20: %.2f, EMA50: %.2f, Close: %.2f", 
-                   last.get('ema20',0), last.get('ema50',0), last['close'])
-        return None
-    
-    logger.info(f"✅ Tendance détectée: {trend}")
-    
-    # Vérifier BIOS
-    bios = detect_bios(df)
-    if not bios:
-        logger.info("❌ Pas de Break of Structure (BIOS)")
-        return None
-    
-    logger.info(f"✅ BIOS détecté: {bios['direction']} at {bios['level']:.2f}")
-    
-    # Vérifier zone OTE
-    ote = detect_ote_zone(df, bios['direction'], bios['level'])
-    if not ote:
-        logger.info("❌ Pas de zone OTE calculable")
-        return None
-    
-    current_price = df['close'].iloc[-1]
-    zone_low, zone_high = ote['entry_zone']
-    in_zone = zone_low <= current_price <= zone_high
-    
-    logger.info(f"   Zone OTE: {zone_low:.2f}-{zone_high:.2f}")
-    logger.info(f"   Prix actuel: {current_price:.2f}")
-    logger.info(f"   Dans zone: {in_zone}")
-    
-    if not in_zone:
-        logger.info("❌ Prix en dehors de la zone OTE")
-        return None
-    
-    # Vérifier momentum
-    signals = detect_momentum_signal(df, trend)
-    logger.info(f"   Signaux momentum: {signals}")
-    
-    required = []
-    score = 0
-    if trend == 'bullish':
-        required = ['macd_bullish', 'rsi_healthy_bull', 'stoch_bullish']
-        score = sum(1 for s in required if s in signals)
-    else:
-        required = ['macd_bearish', 'rsi_healthy_bear', 'stoch_bearish']
-        score = sum(1 for s in required if s in signals)
-    
-    logger.info(f"   Score momentum: {score}/3")
-    
-    if score < 2:
-        logger.info("❌ Score momentum insuffisant")
-        return None
-    
-    logger.info(f"🎉 SIGNAL TROUVÉ: {trend}")
-    return trend if trend == 'bullish' else 'bearish'
+# Configuration des logs
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # =========================
 # ÉTAT GLOBAL
@@ -265,44 +196,6 @@ def detect_ote_zone(df, bios_direction, bios_level):
         }
     
     return None
-    
-    if bios_direction == 'bullish':
-        # Trouver le dernier swing low avant le BIOS
-        swings = df['low'].rolling(window=5, center=True).min()
-        swing_low = swings[swings == swings].iloc[-10:-2].min()
-        
-        if pd.isna(swing_low):
-            return None
-            
-        fibs = calculate_fibonacci_retracement(swing_low, bios_level)
-        ote_low = fibs['0.618']
-        ote_high = fibs['0.786']
-        
-        return {
-            'direction': 'long',
-            'entry_zone': (ote_low, ote_high),
-            'fibs': fibs
-        }
-        
-    elif bios_direction == 'bearish':
-        # Trouver le dernier swing high avant le BIOS
-        swings = df['high'].rolling(window=5, center=True).max()
-        swing_high = swings[swings == swings].iloc[-10:-2].max()
-        
-        if pd.isna(swing_high):
-            return None
-            
-        fibs = calculate_fibonacci_retracement(bios_level, swing_high)
-        ote_low = fibs['0.618']
-        ote_high = fibs['0.786']
-        
-        return {
-            'direction': 'short',
-            'entry_zone': (ote_low, ote_high),
-            'fibs': fibs
-        }
-    
-    return None
 
 def calculate_adaptive_thresholds(df):
     """
@@ -461,77 +354,6 @@ def calculate_signal_strength(df, signal):
     
     return strength
 
-def debug_check_signal(df):
-    """
-    Point d'entrée principal
-    Combine BIOS, OTE, tendance et momentum
-    """
-    global _last_bios_level, _last_bios_direction, _ote_active, _ote_entry_zone
-    
-    if len(df) < 50:
-        return None
-    
-    # Appliquer indicateurs
-    df = apply_indicators(df)
-    
-    # Étape 1: Détecter tendance principale
-    trend = detect_trend(df)
-    if not trend:
-        return None
-    
-    # Étape 2: Détecter BIOS (Break of Structure)
-    bios = detect_bios(df)
-    if bios:
-        _last_bios_level = bios['level']
-        _last_bios_direction = bios['direction']
-        
-        # Étape 3: Calculer zone OTE sur retracement
-        ote_zone = detect_ote_zone(df, bios['direction'], bios['level'])
-        if ote_zone:
-            _ote_active = True
-            _ote_entry_zone = ote_zone['entry_zone']
-    
-    # Étape 4: Si OTE actif, vérifier si on est dans la zone
-    if _ote_active and _ote_entry_zone:
-        current_price = df['close'].iloc[-1]
-        zone_low, zone_high = _ote_entry_zone
-        
-        # Vérifier si le prix est dans la zone OTE
-        in_ote_zone = (zone_low <= current_price <= zone_high)
-        
-        if in_ote_zone:
-            # Étape 5: Vérifier confirmation momentum
-            momentum_signals = detect_momentum_signal(df, trend)
-            
-            # Logique d'entrée selon tendance
-            if trend == 'bullish' and _last_bios_direction == 'bullish':
-                # Signaux requis pour LONG
-                required_signals = ['macd_bullish', 'rsi_healthy_bull', 'stoch_bullish']
-                score = sum(1 for s in required_signals if s in momentum_signals)
-                
-                if score >= 2:  # Au moins 2 signaux sur 3
-                    print(f"📈 LONG signal in OTE zone | Score: {score}/3", flush=True)
-                    print(f"   Zone OTE: {zone_low:.2f}-{zone_high:.2f}", flush=True)
-                    return 'long'
-                    
-            elif trend == 'bearish' and _last_bios_direction == 'bearish':
-                # Signaux requis pour SHORT
-                required_signals = ['macd_bearish', 'rsi_healthy_bear', 'stoch_bearish']
-                score = sum(1 for s in required_signals if s in momentum_signals)
-                
-                if score >= 2:
-                    print(f"📉 SHORT signal in OTE zone | Score: {score}/3", flush=True)
-                    print(f"   Zone OTE: {zone_low:.2f}-{zone_high:.2f}", flush=True)
-                    return 'short'
-    
-    # Reset OTE si trop de temps passé
-    if _ote_active and len(df) > 0:
-        # Désactiver après 10 bougies
-        _ote_active = False
-        _ote_entry_zone = None
-    
-    return None
-
 def calculate_sl_tp_adaptive(entry_price, side, df):
     """
     Calcule SL/TP adaptatifs basés sur ATR avec ratios configurables
@@ -557,4 +379,77 @@ def calculate_sl_tp_adaptive(entry_price, side, df):
     # Calcul du ratio RR réel
     rr_ratio = tp_atr_multiplier / sl_atr_multiplier
     
-    return round(sl_price, 2), round(tp_price, 2), atr_pct, rr_ratio
+    return round(sl_price, 2), round(tp_price, 2), atr_pct
+
+def debug_check_signal(df):
+    """Version debug de check_signal qui explique pourquoi pas de signal"""
+    
+    if len(df) < 50:
+        logger.info("❌ Pas assez de données: %d/50 bougies", len(df))
+        return None
+    
+    # Appliquer indicateurs
+    df = apply_indicators(df)
+    
+    # Vérifier tendance
+    trend = detect_trend(df)
+    if not trend:
+        logger.info("❌ Pas de tendance claire (EMA20/50)")
+        # Afficher les valeurs EMA
+        last = df.iloc[-1]
+        logger.info("   EMA20: %.2f, EMA50: %.2f, Close: %.2f", 
+                   last.get('ema20',0), last.get('ema50',0), last['close'])
+        return None
+    
+    logger.info(f"✅ Tendance détectée: {trend}")
+    
+    # Vérifier BIOS
+    bios = detect_bios(df)
+    if not bios:
+        logger.info("❌ Pas de Break of Structure (BIOS)")
+        return None
+    
+    logger.info(f"✅ BIOS détecté: {bios['direction']} at {bios['level']:.2f}")
+    
+    # Vérifier zone OTE
+    ote = detect_ote_zone(df, bios['direction'], bios['level'])
+    if not ote:
+        logger.info("❌ Pas de zone OTE calculable")
+        return None
+    
+    current_price = df['close'].iloc[-1]
+    zone_low, zone_high = ote['entry_zone']
+    in_zone = zone_low <= current_price <= zone_high
+    
+    logger.info(f"   Zone OTE: {zone_low:.2f}-{zone_high:.2f}")
+    logger.info(f"   Prix actuel: {current_price:.2f}")
+    logger.info(f"   Dans zone: {in_zone}")
+    
+    if not in_zone:
+        logger.info("❌ Prix en dehors de la zone OTE")
+        return None
+    
+    # Vérifier momentum
+    signals = detect_momentum_signal(df, trend)
+    logger.info(f"   Signaux momentum: {signals}")
+    
+    required = []
+    score = 0
+    if trend == 'bullish':
+        required = ['macd_bullish', 'rsi_healthy_bull', 'stoch_bullish']
+        score = sum(1 for s in required if s in signals)
+    else:
+        required = ['macd_bearish', 'rsi_healthy_bear', 'stoch_bearish']
+        score = sum(1 for s in required if s in signals)
+    
+    logger.info(f"   Score momentum: {score}/3")
+    
+    if score < 2:
+        logger.info("❌ Score momentum insuffisant")
+        return None
+    
+    logger.info(f"🎉 SIGNAL TROUVÉ: {trend}")
+    return trend if trend == 'bullish' else 'bearish'
+
+# Garder l'ancien nom pour la compatibilité
+check_signal = debug_check_signal
