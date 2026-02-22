@@ -7,6 +7,81 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
+# Ajouter des logs de débogage
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def debug_check_signal(df):
+    """Version debug de check_signal qui explique pourquoi pas de signal"""
+    
+    if len(df) < 50:
+        logger.info("❌ Pas assez de données: %d/50 bougies", len(df))
+        return None
+    
+    # Appliquer indicateurs
+    df = apply_indicators(df)
+    
+    # Vérifier tendance
+    trend = detect_trend(df)
+    if not trend:
+        logger.info("❌ Pas de tendance claire (EMA20/50)")
+        # Afficher les valeurs EMA
+        last = df.iloc[-1]
+        logger.info("   EMA20: %.2f, EMA50: %.2f, Close: %.2f", 
+                   last.get('ema20',0), last.get('ema50',0), last['close'])
+        return None
+    
+    logger.info(f"✅ Tendance détectée: {trend}")
+    
+    # Vérifier BIOS
+    bios = detect_bios(df)
+    if not bios:
+        logger.info("❌ Pas de Break of Structure (BIOS)")
+        return None
+    
+    logger.info(f"✅ BIOS détecté: {bios['direction']} at {bios['level']:.2f}")
+    
+    # Vérifier zone OTE
+    ote = detect_ote_zone(df, bios['direction'], bios['level'])
+    if not ote:
+        logger.info("❌ Pas de zone OTE calculable")
+        return None
+    
+    current_price = df['close'].iloc[-1]
+    zone_low, zone_high = ote['entry_zone']
+    in_zone = zone_low <= current_price <= zone_high
+    
+    logger.info(f"   Zone OTE: {zone_low:.2f}-{zone_high:.2f}")
+    logger.info(f"   Prix actuel: {current_price:.2f}")
+    logger.info(f"   Dans zone: {in_zone}")
+    
+    if not in_zone:
+        logger.info("❌ Prix en dehors de la zone OTE")
+        return None
+    
+    # Vérifier momentum
+    signals = detect_momentum_signal(df, trend)
+    logger.info(f"   Signaux momentum: {signals}")
+    
+    required = []
+    score = 0
+    if trend == 'bullish':
+        required = ['macd_bullish', 'rsi_healthy_bull', 'stoch_bullish']
+        score = sum(1 for s in required if s in signals)
+    else:
+        required = ['macd_bearish', 'rsi_healthy_bear', 'stoch_bearish']
+        score = sum(1 for s in required if s in signals)
+    
+    logger.info(f"   Score momentum: {score}/3")
+    
+    if score < 2:
+        logger.info("❌ Score momentum insuffisant")
+        return None
+    
+    logger.info(f"🎉 SIGNAL TROUVÉ: {trend}")
+    return trend if trend == 'bullish' else 'bearish'
+
 # =========================
 # ÉTAT GLOBAL
 # =========================
@@ -386,7 +461,7 @@ def calculate_signal_strength(df, signal):
     
     return strength
 
-def check_signal(df):
+def debug_check_signal(df):
     """
     Point d'entrée principal
     Combine BIOS, OTE, tendance et momentum
