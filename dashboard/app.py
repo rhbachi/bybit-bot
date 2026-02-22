@@ -1,11 +1,13 @@
 """
-Dashboard de monitoring en temps réel
+Dashboard de monitoring en temps réel avec authentification
 """
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
+from functools import wraps
 import pandas as pd
 import json
 import os
 import sys
+import secrets
 from datetime import datetime, timedelta
 
 # Ajouter le chemin parent pour les imports
@@ -15,24 +17,55 @@ from analyzers.trade_analyzer import TradeAnalyzer, SignalAnalyzer
 
 app = Flask(__name__)
 
-# Charger les analyseurs
+# =========================
+# CONFIGURATION AUTHENTIFICATION
+# =========================
+app.secret_key = os.getenv('DASHBOARD_SECRET_KEY', secrets.token_hex(32))
+
+# Identifiants depuis variables d'environnement (avec valeurs par défaut sécurisées)
+DASHBOARD_USERNAME = os.getenv('DASHBOARD_USERNAME', 'admin')
+DASHBOARD_PASSWORD = os.getenv('DASHBOARD_PASSWORD', 'change_me_please')
+
+def check_auth(username, password):
+    """Vérifie les identifiants"""
+    return username == DASHBOARD_USERNAME and password == DASHBOARD_PASSWORD
+
+def authenticate():
+    """Renvoie une réponse d'authentification"""
+    return Response(
+        'Authentification requise pour accéder au dashboard',
+        401,
+        {'WWW-Authenticate': 'Basic realm="Dashboard Trading Bot"'}
+    )
+
+def requires_auth(f):
+    """Décorateur pour protéger les routes"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+# =========================
+# CHARGEMENT DES ANALYSEURS
+# =========================
 trade_analyzer = TradeAnalyzer()
 signal_analyzer = SignalAnalyzer()
 
+# =========================
+# ROUTES PROTÉGÉES
+# =========================
+
 @app.route('/')
+@requires_auth
 def index():
     """Page principale du dashboard"""
-    # Récupérer le symbole depuis la config ou utiliser une valeur par défaut
-    from config import SYMBOL
-    # Nettoyer le symbole pour TradingView (enlever /USDT:USDT)
-    tv_symbol = SYMBOL.replace('/USDT:USDT', 'USDT').replace('/', '')
-    if 'BTC' in tv_symbol:
-        tv_symbol = f"BINANCE:{tv_symbol}"
-    else:
-        tv_symbol = f"BINANCE:{tv_symbol}"
-    
-    return render_template('index.html', symbol=tv_symbol)
+    return render_template('index.html')
+
 @app.route('/api/overview')
+@requires_auth
 def get_overview():
     """API - Vue d'ensemble"""
     risk_metrics = trade_analyzer.get_risk_metrics()
@@ -45,6 +78,7 @@ def get_overview():
     })
 
 @app.route('/api/daily_stats')
+@requires_auth
 def get_daily_stats():
     """API - Stats journalières"""
     days = int(request.args.get('days', 30))
@@ -70,6 +104,7 @@ def get_daily_stats():
     })
 
 @app.route('/api/hourly')
+@requires_auth
 def get_hourly():
     """API - Performance horaire"""
     hourly = trade_analyzer.get_hourly_performance()
@@ -85,11 +120,13 @@ def get_hourly():
     })
 
 @app.route('/api/parameters')
+@requires_auth
 def get_parameters():
     """API - Analyse des paramètres"""
     return jsonify(trade_analyzer.get_best_parameters())
 
 @app.route('/api/recent_trades')
+@requires_auth
 def get_recent_trades():
     """API - Trades récents"""
     limit = int(request.args.get('limit', 20))
@@ -115,6 +152,7 @@ def get_recent_trades():
     return jsonify(trades[::-1])  # Inverser pour avoir le plus récent en premier
 
 @app.route('/api/recent_signals')
+@requires_auth
 def get_recent_signals():
     """API - Signaux récents"""
     limit = int(request.args.get('limit', 20))
@@ -139,15 +177,19 @@ def get_recent_signals():
     return jsonify(signals[::-1])
 
 @app.route('/api/best_trades')
+@requires_auth
 def get_best_trades():
     """API - Meilleurs trades"""
     return jsonify(trade_analyzer.get_best_trades(5))
 
 @app.route('/api/worst_trades')
+@requires_auth
 def get_worst_trades():
     """API - Pires trades"""
     return jsonify(trade_analyzer.get_worst_trades(5))
+
 @app.route('/api/current_positions')
+@requires_auth
 def get_current_positions():
     """API - Positions actuelles"""
     try:
@@ -157,7 +199,6 @@ def get_current_positions():
         
         # Pour l'instant, simulons avec des données de test
         import random
-        from datetime import datetime, timedelta
         
         # Simuler 0-3 positions ouvertes
         num_positions = random.randint(0, 3)
@@ -191,5 +232,15 @@ def get_current_positions():
     except Exception as e:
         return jsonify({'error': str(e), 'positions': []}), 500
 
+# =========================
+# LANCEMENT DU SERVEUR
+# =========================
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = int(os.getenv('PORT', 5000))
+    debug = os.getenv('FLASK_DEBUG', 'true').lower() == 'true'
+    
+    print(f"🚀 Dashboard démarré sur le port {port}")
+    print(f"🔐 Authentification requise (utilisateur: {DASHBOARD_USERNAME})")
+    print(f"⚠️  Changez le mot de passe dans les variables d'environnement !")
+    
+    app.run(debug=debug, host='0.0.0.0', port=port)
