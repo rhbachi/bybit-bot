@@ -191,42 +191,30 @@ def get_worst_trades():
 @app.route('/api/current_positions')
 @requires_auth
 def get_current_positions():
-    """API - Positions actuelles"""
+    """API - Positions actuelles (données réelles)"""
     try:
-        # Lire le fichier des trades pour trouver les positions ouvertes
-        # Note: Dans une vraie implémentation, vous devriez avoir un fichier positions.json
-        # ou interroger directement le bot via une API
+        # Essayer de lire un fichier de positions réelles s'il existe
+        positions_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'current_positions.json')
         
-        # Pour l'instant, simulons avec des données de test
-        import random
-        
-        # Simuler 0-3 positions ouvertes
-        num_positions = random.randint(0, 3)
-        positions = []
-        
-        base_price = 2850  # Prix de base pour ETH
-        
-        for i in range(num_positions):
-            side = random.choice(['long', 'short'])
-            entry = base_price + random.uniform(-50, 50)
-            current = entry * (1 + random.uniform(-0.02, 0.03))
-            pnl = ((current - entry) / entry * 100) if side == 'long' else ((entry - current) / entry * 100)
-            
-            positions.append({
-                'id': i+1,
-                'symbol': 'ETH/USDT',
-                'side': side,
-                'entry_price': round(entry, 2),
-                'current_price': round(current, 2),
-                'pnl_percent': round(pnl, 2),
-                'pnl_usdt': round((current - entry) * 0.01 if side == 'long' else (entry - current) * 0.01, 2),
-                'duration': f"{random.randint(10, 120)} min"
+        if os.path.exists(positions_file):
+            with open(positions_file, 'r') as f:
+                data = json.load(f)
+            return jsonify(data)
+        else:
+            # Pas de fichier, pas de positions
+            return jsonify({
+                'positions': [],
+                'total_pnl': 0,
+                'timestamp': datetime.now().isoformat()
             })
-        
+            
+    except Exception as e:
+        # En cas d'erreur, retourner une liste vide
         return jsonify({
-            'positions': positions,
-            'total_pnl': round(sum(p['pnl_usdt'] for p in positions), 2),
-            'timestamp': datetime.now().isoformat()
+            'positions': [],
+            'total_pnl': 0,
+            'timestamp': datetime.now().isoformat(),
+            'error': str(e)
         })
         
     except Exception as e:
