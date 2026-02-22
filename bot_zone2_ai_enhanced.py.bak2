@@ -1,0 +1,559 @@
+"""
+Bot Zone2 avec stratégie AI avancée (EMA, MACD, RSI, Stochastic, OTE Fibonacci)
+"""
+import time
+import pandas as pd
+from datetime import datetime, timezone
+
+from config import exchange, SYMBOL, CAPITAL, LEVERAGE
+from risk_improved import calculate_position_size
+from notifier import send_telegram
+from logger import init_logger, log_trade
+from logger_enhanced import get_logger
+from strategy_ai_enhanced import (
+    apply_indicators, check_signal, calculate_sl_tp_adaptive,
+    reset_state, get_state, calculate_signal_strength
+)
+
+# =========================
+# PARAMÈTRES
+# =========================
+TIMEFRAME = "5m"  # Timeframe unique pour cette stratégie
+MIN_BODY_PCT = 0.0005  # 0.05%
+COOLDOWN_SECONDS = 60
+
+# Mode papier trading (True = pas de vrais ordres)
+PAPER_TRADING = True
+
+# Trailing stop
+TRAILING_STOP_ACTIVATION = 0.01  # 1% gain pour activer
+TRAILING_STOP_DISTANCE = 0.005    # 0.5% de trailing
+
+# Circuit breaker
+MAX_DAILY_LOSS_PCT = 5
+MAX_CONSECUTIVE_LOSSES = 3
+
+# =========================
+# ÉTAT
+# =========================
+in_position = False
+current_trade = {
+    "entry_price": 0,
+    "side": None,
+    "qty": 0,
+    "sl_price": 0,
+    "tp_price": 0,
+    "entry_time": None,
+    "highest_price": 0,   # Pour trailing stop
+    "lowest_price": 0,    # Pour trailing stop
+    "trailing_activated": False
+}
+
+# Stats
+consecutive_losses = 0
+daily_pnl = 0
+initial_capital = CAPITAL
+last_trade_time = None
+total_trades = 0
+
+# Logger amélioré
+enhanced_logger = get_logger("ZONE2_AI")
+
+# =========================
+# UTILS
+# =========================
+def fetch_ohlcv(limit=100):
+    """Récupère les données OHLCV"""
+    try:
+        ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=limit)
+        df = pd.DataFrame(
+            ohlcv,
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
+        return df
+    except Exception as e:
+        enhanced_logger.log_error("Erreur fetch_ohlcv", e)
+        return pd.DataFrame()
+
+def get_available_balance():
+    """Récupère le solde disponible"""
+    try:
+        balance = exchange.fetch_balance()
+        usdt = balance.get('USDT', {})
+        return float(usdt.get('free', 0))
+    except Exception as e:
+        enhanced_logger.log_error("Erreur balance", e)
+        return 0
+
+def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
+    """Place les ordres SL/TP optimisés"""
+    if PAPER_TRADING:
+        print(f"📝 PAPER - SL/TP simulés: SL={sl_price:.2f}, TP={tp_price:.2f}", flush=True)
+        return True
+        
+    try:
+        exchange.private_post_v5_position_trading_stop({
+            'category': 'linear',
+            'symbol': symbol.replace('/', '').replace(':USDT', ''),
+            'stopLoss': str(sl_price),
+            'takeProfit': str(tp_price),
+            'tpTriggerBy': 'LastPrice',
+            'slTriggerBy': 'LastPrice',
+            'tpslMode': 'Full',
+            'tpOrderType': 'Limit',
+            'slOrderType': 'Market',
+            'positionIdx': 0,
+        })
+        print(f"✅ SL/TP placés | SL={sl_price:.2f} | TP={tp_price:.2f}", flush=True)
+        return True
+    except Exception as e:
+        enhanced_logger.log_error("Erreur SL/TP", e)
+        return False
+
+def update_trailing_stop(symbol, side, qty, current_price, current_sl):
+    """Met à jour le trailing stop"""
+    global current_trade
+    
+    if PAPER_TRADING:
+        return current_sl
+    
+    if side == 'long':
+        # Mettre à jour le plus haut
+        if current_price > current_trade['highest_price']:
+            current_trade['highest_price'] = current_price
+            
+        # Vérifier si on peut trailing
+        gain_pct = (current_price - current_trade['entry_price']) / current_trade['entry_price']
+        
+        if gain_pct > TRAILING_STOP_ACTIVATION:
+            new_sl = current_price * (1 - TRAILING_STOP_DISTANCE)
+            if new_sl > current_sl:
+                print(f"📈 Trailing stop: {current_sl:.2f} → {new_sl:.2f}", flush=True)
+                try:
+                    exchange.private_post_v5_position_trading_stop({
+                        'category': 'linear',
+                        'symbol': symbol.replace('/', '').replace(':USDT', ''),
+                        'stopLoss': str(new_sl),
+                        'slTriggerBy': 'LastPrice',
+                        'positionIdx': 0,
+                    })
+                    return new_sl
+                except Exception as e:
+                    enhanced_logger.log_error("Erreur trailing stop", e)
+                    
+    else:  # short
+        if current_price < current_trade['lowest_price']:
+            current_trade['lowest_price'] = current_price
+            
+        gain_pct = (current_trade['entry_price'] - current_price) / current_trade['entry_price']
+        
+        if gain_pct > TRAILING_STOP_ACTIVATION:
+            new_sl = current_price * (1 + TRAILING_STOP_DISTANCE)
+            if new_sl < current_sl:
+                print(f"📈 Trailing stop: {current_sl:.2f} → {new_sl:.2f}", flush=True)
+                try:
+                    exchange.private_post_v5_position_trading_stop({
+                        'category': 'linear',
+                        'symbol': symbol.replace('/', '').replace(':USDT', ''),
+                        'stopLoss': str(new_sl),
+                        'slTriggerBy': 'LastPrice',
+                        'positionIdx': 0,
+                    })
+                    return new_sl
+                except Exception as e:
+                    enhanced_logger.log_error("Erreur trailing stop", e)
+    
+    return current_sl
+
+def check_circuit_breaker():
+    """Vérifie si on doit arrêter le trading"""
+    global consecutive_losses, initial_capital
+    
+    # Si pas encore de trades, on ne déclenche pas le circuit breaker
+    if total_trades == 0:
+        return False, "OK - Premier démarrage"
+    
+    # Perte journalière max
+    current_balance = get_available_balance()
+    
+    # Éviter division par zéro ou valeurs négatives
+    if initial_capital <= 0:
+        initial_capital = current_balance
+    
+    daily_loss_pct = (initial_capital - current_balance) / initial_capital * 100 if initial_capital > 0 else 0
+    
+    # Ne pas déclencher si c'est une perte infime (arrondis)
+    if daily_loss_pct > MAX_DAILY_LOSS_PCT and daily_loss_pct < 100:
+        msg = f"🚨 CIRCUIT BREAKER: Perte journalière {daily_loss_pct:.1f}% > {MAX_DAILY_LOSS_PCT}%"
+        print(msg, flush=True)
+        send_telegram(msg)
+        enhanced_logger.log_error(msg)
+        return True, f"Daily loss: {daily_loss_pct:.1f}%"
+    
+    # Pertes consécutives
+    if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
+        msg = f"🚨 CIRCUIT BREAKER: {consecutive_losses} pertes consécutives"
+        print(msg, flush=True)
+        send_telegram(msg)
+        enhanced_logger.log_error(msg)
+        return True, f"{consecutive_losses} losses"
+    
+    return False, "OK"
+
+def check_signal_with_logging(df):
+    """Wrapper pour logger tous les signaux"""
+    # Appliquer les indicateurs d'abord
+    df_with_indicators = apply_indicators(df)
+    
+    # Détecter le signal
+    signal = check_signal(df_with_indicators)
+    
+    # Préparer les données pour le log
+    last_row = df_with_indicators.iloc[-1] if not df_with_indicators.empty else None
+    
+    if last_row is not None:
+        # Calculer la position dans les bandes
+        bb_position = 0
+        if 'bb_upper' in last_row and 'bb_lower' in last_row:
+            bb_range = last_row['bb_upper'] - last_row['bb_lower']
+            if bb_range > 0:
+                bb_position = (last_row['close'] - last_row['bb_lower']) / bb_range
+        
+        signal_data = {
+            'symbol': SYMBOL,
+            'signal': signal if signal else 'none',
+            'price': last_row['close'],
+            'trend': detect_trend(df_with_indicators) or 'unknown',
+            'rsi': last_row.get('rsi', 0),
+            'macd': last_row.get('macd', 0),
+            'stoch_k': last_row.get('stoch_k', 0),
+            'stoch_d': last_row.get('stoch_d', 0),
+            'bb_position': bb_position,
+            'ote_zone': get_state().get('ote_active', False),
+            'bios_detected': get_state().get('bios_level') is not None,
+            'signal_strength': calculate_signal_strength(df_with_indicators, signal) if signal else 0,
+            'executed': False,
+            'reason_not_executed': ''
+        }
+        
+        enhanced_logger.log_signal(signal_data)
+    
+    return signal, df_with_indicators
+
+def detect_trend(df):
+    """Fonction helper pour détecter la tendance"""
+    from strategy_ai_enhanced import detect_trend as dt
+    return dt(df)
+
+# =========================
+# MAIN
+# =========================
+def run():
+    global in_position, current_trade, consecutive_losses, daily_pnl, last_trade_time, total_trades
+    
+    print("🤖 Bot ZONE2 AI ENHANCED démarré", flush=True)
+    print("📊 Stratégie: EMA20/50 + MACD + RSI + Stochastic + OTE Fibonacci", flush=True)
+    print(f"📝 Mode PAPER: {PAPER_TRADING}", flush=True)
+    
+    init_logger()
+    
+    # Configuration leverage
+    if not PAPER_TRADING:
+        try:
+            exchange.set_leverage(LEVERAGE, SYMBOL)
+            print(f"⚙️ Leverage: {LEVERAGE}x", flush=True)
+        except Exception as e:
+            if "110043" not in str(e):
+                print(f"⚠️ Erreur leverage: {e}", flush=True)
+    
+    # Notification démarrage
+    mode = "📝 PAPER" if PAPER_TRADING else "💰 REAL"
+    send_telegram(
+        f"🤖 ZONE2 AI ENHANCED {mode}\n"
+        f"📊 {SYMBOL} | {TIMEFRAME}\n"
+        f"⚙️ Capital: {CAPITAL} USDT | Lev: {LEVERAGE}x\n"
+        f"📈 Stratégie: OTE Fibonacci + Multi-indicateurs\n"
+        f"🛡️ Circuit breaker: {MAX_DAILY_LOSS_PCT}% daily | {MAX_CONSECUTIVE_LOSSES} losses"
+    )
+    
+    while True:
+        try:
+            # Circuit breaker - seulement après quelques trades
+            if total_trades > 5:  # Attendre d'avoir au moins 5 trades
+                should_stop, reason = check_circuit_breaker()
+                if should_stop:
+                    print(f"⛔ Trading arrêté: {reason}", flush=True)
+                    time.sleep(300)  # 5 minutes
+                    continue
+            else:
+                print(f"⏳ Phase de chauffe: {total_trades}/5 trades avant activation circuit breaker", flush=True)
+            
+            # Cooldown
+            if last_trade_time and time.time() - last_trade_time < COOLDOWN_SECONDS:
+                time.sleep(10)
+                continue
+            
+            # Récupérer données
+            df = fetch_ohlcv(limit=100)
+            if df.empty:
+                print("⚠️ Pas de données OHLCV", flush=True)
+                time.sleep(60)
+                continue
+            
+            # Vérifier signal avec logging
+            signal, df_with_indicators = check_signal_with_logging(df)
+            
+            # Trading
+            if not in_position and signal:
+                print(f"🎯 Signal détecté: {signal.upper()}", flush=True)
+                
+                # Vérifier solde
+                available = get_available_balance()
+                if available < 5:
+                    print("❌ Solde insuffisant", flush=True)
+                    time.sleep(60)
+                    continue
+                
+                # Capital effectif
+                effective_capital = min(CAPITAL, available * 0.95)
+                
+                # Prix actuel
+                current_price = df_with_indicators['close'].iloc[-1]
+                
+                # Calculer SL/TP adaptatifs
+                sl_price, tp_price, atr_pct = calculate_sl_tp_adaptive(
+                    current_price, signal, df_with_indicators
+                )
+                
+                # Calculer taille position
+                qty = calculate_position_size(
+                    effective_capital,
+                    0.02,  # 2% risque
+                    abs(current_price - sl_price) / current_price,  # SL pct
+                    current_price,
+                    LEVERAGE
+                )
+                
+                if qty <= 0:
+                    print("⚠️ Quantité invalide", flush=True)
+                    time.sleep(60)
+                    continue
+                
+                # Ouvrir position
+                order_side = "buy" if signal == "long" else "sell"
+                print(f"📊 Ouverture {signal.upper()} | Qty={qty}", flush=True)
+                
+                try:
+                    # Simuler ou réel
+                    if PAPER_TRADING:
+                        print(f"📝 PAPER - Ordre {order_side} {qty} {SYMBOL} à {current_price}", flush=True)
+                        order_success = True
+                    else:
+                        order = exchange.create_market_order(SYMBOL, order_side, qty)
+                        order_success = True
+                    
+                    if order_success:
+                        # Placer SL/TP
+                        success = place_sl_tp_orders(
+                            SYMBOL, signal, qty, current_price, sl_price, tp_price
+                        )
+                        
+                        if success:
+                            # Mettre à jour état
+                            in_position = True
+                            last_trade_time = time.time()
+                            
+                            current_trade = {
+                                "entry_price": current_price,
+                                "side": signal,
+                                "qty": qty,
+                                "sl_price": sl_price,
+                                "tp_price": tp_price,
+                                "entry_time": datetime.now(timezone.utc),
+                                "highest_price": current_price if signal == "long" else 0,
+                                "lowest_price": current_price if signal == "short" else float('inf'),
+                                "trailing_activated": False
+                            }
+                            
+                            # Notification
+                            msg = (
+                                f"🟢 TRADE OUVERT ({signal.upper()})\n"
+                                f"Prix: {current_price:.2f}\n"
+                                f"Qty: {qty}\n"
+                                f"SL: {sl_price:.2f} ({abs(current_price-sl_price)/current_price*100:.2f}%)\n"
+                                f"TP: {tp_price:.2f} ({abs(tp_price-current_price)/current_price*100:.2f}%)\n"
+                                f"ATR: {atr_pct*100:.2f}%\n"
+                                f"R:R: {abs(tp_price-current_price)/abs(current_price-sl_price):.2f}"
+                            )
+                            print(msg, flush=True)
+                            send_telegram(msg)
+                            
+                        else:
+                            # Fermer si SL/TP échouent
+                            if not PAPER_TRADING:
+                                close_side = "sell" if signal == "long" else "buy"
+                                exchange.create_market_order(SYMBOL, close_side, qty, params={'reduceOnly': True})
+                            print("🚨 Position fermée (SL/TP failed)", flush=True)
+                            enhanced_logger.log_error("SL/TP failed - position fermée")
+                
+                except Exception as e:
+                    enhanced_logger.log_error("Erreur execution ordre", e)
+                    print(f"❌ Erreur execution: {e}", flush=True)
+            
+            # Gestion position ouverte
+            elif in_position:
+                current_price = df_with_indicators['close'].iloc[-1]
+                
+                # Mettre à jour trailing stop
+                new_sl = update_trailing_stop(
+                    SYMBOL,
+                    current_trade['side'],
+                    current_trade['qty'],
+                    current_price,
+                    current_trade['sl_price']
+                )
+                
+                if new_sl != current_trade['sl_price']:
+                    current_trade['sl_price'] = new_sl
+                    current_trade['trailing_activated'] = True
+                
+                # Vérifier si position encore ouverte
+                if PAPER_TRADING:
+                    # En mode papier, simuler la fermeture
+                    if current_trade['side'] == 'long':
+                        if current_price <= current_trade['sl_price'] or current_price >= current_trade['tp_price']:
+                            position_closed = True
+                            exit_reason = "SL" if current_price <= current_trade['sl_price'] else "TP"
+                        else:
+                            position_closed = False
+                            exit_reason = None
+                    else:  # short
+                        if current_price >= current_trade['sl_price'] or current_price <= current_trade['tp_price']:
+                            position_closed = True
+                            exit_reason = "SL" if current_price >= current_trade['sl_price'] else "TP"
+                        else:
+                            position_closed = False
+                            exit_reason = None
+                else:
+                    # Mode réel - vérifier via API
+                    try:
+                        positions = exchange.fetch_positions([SYMBOL])
+                        pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
+                        position_closed = pos and float(pos.get("contracts", 0)) == 0
+                        exit_reason = "SL/TP" if position_closed else None
+                    except Exception as e:
+                        enhanced_logger.log_error("Erreur vérification position", e)
+                        position_closed = False
+                        exit_reason = None
+                
+                if position_closed:
+                    # Position fermée
+                    print(f"🔔 Position fermée par {exit_reason}", flush=True)
+                    
+                    # Calculer P&L
+                    if current_trade['side'] == 'long':
+                        pnl_pct = (current_price - current_trade['entry_price']) / current_trade['entry_price'] * 100
+                        pnl_usdt = (current_price - current_trade['entry_price']) * current_trade['qty']
+                    else:
+                        pnl_pct = (current_trade['entry_price'] - current_price) / current_trade['entry_price'] * 100
+                        pnl_usdt = (current_trade['entry_price'] - current_price) * current_trade['qty']
+                    
+                    result = "WIN" if pnl_pct > 0 else "LOSS"
+                    
+                    # Mettre à jour stats
+                    if result == "LOSS":
+                        consecutive_losses += 1
+                    else:
+                        consecutive_losses = 0
+                    
+                    total_trades += 1
+                    
+                    # Log détaillé
+                    trade_data = {
+                        'timestamp': datetime.now().isoformat(),
+                        'bot_name': 'ZONE2_AI',
+                        'symbol': SYMBOL,
+                        'side': current_trade['side'],
+                        'entry_price': current_trade['entry_price'],
+                        'exit_price': current_price,
+                        'quantity': current_trade['qty'],
+                        'pnl_usdt': pnl_usdt,
+                        'pnl_percent': pnl_pct,
+                        'result': result,
+                        'duration_seconds': (datetime.now(timezone.utc) - current_trade['entry_time']).seconds,
+                        'exit_reason': exit_reason or 'unknown',
+                        'entry_signal_strength': 2,  # À améliorer
+                        'entry_rsi': df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators else 0,
+                        'entry_macd': df_with_indicators['macd'].iloc[-1] if 'macd' in df_with_indicators else 0,
+                        'entry_stoch_k': df_with_indicators['stoch_k'].iloc[-1] if 'stoch_k' in df_with_indicators else 0,
+                        'entry_stoch_d': df_with_indicators['stoch_d'].iloc[-1] if 'stoch_d' in df_with_indicators else 0,
+                        'entry_bb_position': 0,  # À calculer
+                        'entry_atr_percent': 0,  # À calculer
+                        'entry_ema_trend': detect_trend(df_with_indicators) or '',
+                        'exit_rsi': df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators else 0,
+                        'exit_macd': df_with_indicators['macd'].iloc[-1] if 'macd' in df_with_indicators else 0,
+                        'max_favorable_price': current_trade.get('highest_price', 0),
+                        'max_adverse_price': current_trade.get('lowest_price', 0),
+                        'trailing_activated': current_trade.get('trailing_activated', False),
+                        'commission_paid': 0,
+                        'slippage_bps': 0
+                    }
+                    
+                    enhanced_logger.log_trade_detailed(trade_data)
+                    
+                    # Logger standard
+                    log_trade(
+                        SYMBOL,
+                        current_trade['side'],
+                        current_trade['qty'],
+                        current_trade['entry_price'],
+                        current_price,
+                        pnl_pct,
+                        result
+                    )
+                    
+                    # Mettre à jour métriques performance
+                    enhanced_logger.update_performance_metrics({
+                        'total_trades': total_trades,
+                        'win_rate': 0,  # À calculer
+                        'daily_pnl': daily_pnl
+                    })
+                    
+                    # Notification
+                    duration = (datetime.now(timezone.utc) - current_trade['entry_time']).seconds
+                    msg = (
+                        f"{'🟢 WIN' if pnl_pct>0 else '🔴 LOSS'} - TRADE FERMÉ\n"
+                        f"Direction: {current_trade['side'].upper()}\n"
+                        f"Entrée: {current_trade['entry_price']:.2f}\n"
+                        f"Sortie: {current_price:.2f}\n"
+                        f"P&L: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)\n"
+                        f"Durée: {duration}s\n"
+                        f"Raison: {exit_reason}"
+                    )
+                    send_telegram(msg)
+                    
+                    # Reset
+                    in_position = False
+                    current_trade = {
+                        "entry_price": 0,
+                        "side": None,
+                        "qty": 0,
+                        "sl_price": 0,
+                        "tp_price": 0,
+                        "entry_time": None,
+                        "highest_price": 0,
+                        "lowest_price": 0,
+                        "trailing_activated": False
+                    }
+            
+            # Attendre 5 minutes (timeframe 5m)
+            time.sleep(300)
+            
+        except Exception as e:
+            enhanced_logger.log_error("Erreur loop principale", e)
+            print(f"❌ Erreur loop: {e}", flush=True)
+            send_telegram(f"❌ Erreur: {e}")
+            time.sleep(60)
+
+if __name__ == "__main__":
+    run()

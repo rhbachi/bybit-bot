@@ -1,5 +1,8 @@
-ccxt
+﻿ccxt
 pandas
 python-dotenv
 requests
 openpyxl
+flask
+plotly
+numpy

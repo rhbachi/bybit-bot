@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Trading Bots</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.1.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0f1e;
+            color: #e0e5f0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* En-tête fixe */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: #1a1f32;
+            border-bottom: 1px solid #2a2f42;
+            flex-shrink: 0;
+        }
+        
+        .header h1 {
+            color: #00d4aa;
+            font-size: 24px;
+        }
+        
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .last-update {
+            color: #8892b0;
+            font-size: 14px;
+        }
+        
+        .refresh-btn {
+            background: #00d4aa;
+            color: #0a0f1e;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: opacity 0.2s;
+        }
+        
+        .refresh-btn:hover {
+            opacity: 0.9;
+        }
+        
+        /* Zone scrollable */
+        .scrollable-content {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 20px;
+        }
+        
+        /* Grilles */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .tables-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        /* Cartes */
+        .card {
+            background: #1a1f32;
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            transition: transform 0.2s;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .card-title {
+            color: #8892b0;
+            font-size: 14px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        /* Stats cards */
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #8892b0;
+        }
+        
+        .negative {
+            color: #ff6b6b;
+        }
+        
+        .positive {
+            color: #00d4aa;
+        }
+        
+        /* TradingView */
+        .tradingview-container {
+            width: 100%;
+            height: 500px;
+            margin-bottom: 20px;
+        }
+        
+        /* Symbol selector */
+        .symbol-selector {
+            background: #2a2f42;
+            color: #e0e5f0;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        
+        /* Tableaux */
+        .table-responsive {
+            overflow-x: auto;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        
+        th {
+            text-align: left;
+            padding: 10px 5px;
+            color: #8892b0;
+            font-weight: normal;
+            border-bottom: 1px solid #2a2f42;
+            position: sticky;
+            top: 0;
+            background: #1a1f32;
+        }
+        
+        td {
+            padding: 8px 5px;
+            border-bottom: 1px solid #2a2f42;
+        }
+        
+        /* Badges */
+        .badge {
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            display: inline-block;
+        }
+        
+        .badge-win { background: #00d4aa20; color: #00d4aa; }
+        .badge-loss { background: #ff6b6b20; color: #ff6b6b; }
+        .badge-long { background: #4a9eff20; color: #4a9eff; }
+        .badge-short { background: #ff9f4a20; color: #ff9f4a; }
+        
+        /* Positions */
+        .positions-chart {
+            height: 120px;
+            margin-top: 15px;
+        }
+        
+        .empty-message {
+            text-align: center;
+            padding: 30px;
+            color: #8892b0;
+        }
+        
+        /* Scrollbar personnalisée */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #1a1f32;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #00d4aa40;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #00d4aa;
+        }
+        
+        /* Media queries - uniquement pour la largeur */
+        @media (max-width: 1200px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .charts-grid, .tables-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .tradingview-container {
+                height: 400px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            
+            .header h1 {
+                font-size: 20px;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .tradingview-container {
+                height: 350px;
+            }
+            
+            .stat-value {
+                font-size: 20px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .tradingview-container {
+                height: 300px;
+            }
+            
+            table {
+                font-size: 11px;
+            }
+            
+            .badge {
+                padding: 2px 4px;
+                font-size: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- En-tête fixe -->
+    <div class="header">
+        <div class="header-left">
+            <h1>🤖 Trading Bots Dashboard</h1>
+            <div class="last-update" id="lastUpdate"></div>
+        </div>
+        <button class="refresh-btn" onclick="refreshAll()">🔄 Actualiser</button>
+    </div>
+    
+    <!-- Zone scrollable -->
+    <div class="scrollable-content">
+        <!-- Stats Cards -->
+        <div class="stats-grid" id="statsGrid"></div>
+        
+        <!-- TradingView Chart -->
+        <div class="card tradingview-container" style="height: auto; padding: 0;">
+            <div style="padding: 15px 15px 0 15px; display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #8892b0;">📈 Graphique Temps Réel</span>
+                <select id="symbolSelector" class="symbol-selector">
+                    <option value="BINANCE:ETHUSDT">ETH/USDT</option>
+                    <option value="BINANCE:BTCUSDT">BTC/USDT</option>
+                    <option value="BINANCE:SOLUSDT">SOL/USDT</option>
+                </select>
+            </div>
+            <div id="tradingview_chart" style="height: 450px; width: 100%;"></div>
+        </div>
+        
+        <!-- Positions Actuelles -->
+        <div class="card" style="margin-top: 15px;">
+            <div class="card-title">
+                <span>📍 Positions Actuelles</span>
+                <span id="totalPnlPositions" style="font-size: 14px;"></span>
+            </div>
+            <div class="table-responsive">
+                <table id="positionsTable">
+                    <thead>
+                        <tr>
+                            <th>Symbole</th>
+                            <th>Side</th>
+                            <th>Entrée</th>
+                            <th>Actuel</th>
+                            <th>P&L %</th>
+                            <th>P&L USDT</th>
+                            <th>Durée</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div id="noPositions" class="empty-message" style="display: none;">
+                📭 Aucune position ouverte
+            </div>
+            <div id="positionsMiniChart" class="positions-chart"></div>
+        </div>
+        
+        <!-- Graphiques de performance -->
+        <div class="charts-grid" style="margin-top: 15px;">
+            <div class="card">
+                <div class="card-title">📈 P&L Journalier (30 jours)</div>
+                <div id="dailyPnlChart" style="height: 250px;"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">⏰ Performance par Heure</div>
+                <div id="hourlyChart" style="height: 250px;"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">📊 Winrate par Force de Signal</div>
+                <div id="strengthChart" style="height: 250px;"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">🔄 Trades par Jour</div>
+                <div id="tradesCountChart" style="height: 250px;"></div>
+            </div>
+        </div>
+        
+        <!-- Tables des trades et signaux -->
+        <div class="tables-grid" style="margin-top: 15px;">
+            <div class="card">
+                <div class="card-title">🟢 Derniers Trades</div>
+                <div class="table-responsive">
+                    <table id="recentTrades">
+                        <thead>
+                            <tr>
+                                <th>Heure</th>
+                                <th>Side</th>
+                                <th>P&L</th>
+                                <th>Résultat</th>
+                                <th>Sortie</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-title">📡 Derniers Signaux</div>
+                <div class="table-responsive">
+                    <table id="recentSignals">
+                        <thead>
+                            <tr>
+                                <th>Heure</th>
+                                <th>Signal</th>
+                                <th>Force</th>
+                                <th>Exec</th>
+                                <th>Raison</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- TradingView Widget Script -->
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    
+    <script>
+        // Initialiser le widget TradingView
+        function initTradingViewWidget(symbol = 'BINANCE:ETHUSDT') {
+            const container = document.getElementById('tradingview_chart');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            new TradingView.widget({
+                "width": "100%",
+                "height": "100%",
+                "symbol": symbol,
+                "interval": "60",
+                "timezone": "exchange",
+                "theme": "dark",
+                "style": "1",
+                "locale": "fr",
+                "toolbar_bg": "#1a1f32",
+                "enable_publishing": false,
+                "hide_side_toolbar": false,
+                "allow_symbol_change": true,
+                "container_id": "tradingview_chart",
+                "studies": [
+                    "RSI@tv-basicstudies",
+                    "MACD@tv-basicstudies",
+                    "StochasticRSI@tv-basicstudies"
+                ],
+                "show_popup_button": true,
+                "popup_width": "1000",
+                "popup_height": "650",
+                "support_host": "https://www.tradingview.com"
+            });
+        }
+
+        // Fonctions de chargement des données
+        async function loadOverview() {
+            try {
+                const response = await fetch('/api/overview');
+                const data = await response.json();
+                
+                document.getElementById('lastUpdate').textContent = 
+                    `Dernière mise à jour: ${new Date(data.last_update).toLocaleString()}`;
+                
+                const metrics = data.risk_metrics || {};
+                const signals = data.signal_stats || {};
+                
+                document.getElementById('statsGrid').innerHTML = `
+                    <div class="card">
+                        <div class="stat-value ${metrics.total_pnl_usdt >= 0 ? 'positive' : 'negative'}">
+                            ${metrics.total_pnl_usdt || 0} USDT
+                        </div>
+                        <div class="stat-label">P&L Total • ${metrics.total_trades || 0} trades</div>
+                    </div>
+                    <div class="card">
+                        <div class="stat-value">${metrics.win_rate || 0}%</div>
+                        <div class="stat-label">Winrate • PF: ${metrics.profit_factor || 0}</div>
+                    </div>
+                    <div class="card">
+                        <div class="stat-value">${metrics.sharpe_ratio || 0}</div>
+                        <div class="stat-label">Sharpe • DD: ${metrics.max_drawdown_pct || 0}%</div>
+                    </div>
+                    <div class="card">
+                        <div class="stat-value">${signals.execution_rate || 0}%</div>
+                        <div class="stat-label">Signaux • ${signals.executed_signals || 0}/${signals.total_signals || 0}</div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error("Erreur loadOverview:", error);
+            }
+        }
+        
+        async function loadDailyStats() {
+            try {
+                const response = await fetch('/api/daily_stats?days=30');
+                const data = await response.json();
+                
+                if (!data.dates?.length) {
+                    Plotly.purge('dailyPnlChart');
+                    return;
+                }
+                
+                const trace = {
+                    x: data.dates,
+                    y: data.pnls,
+                    type: 'bar',
+                    marker: { color: data.pnls.map(p => p >= 0 ? '#00d4aa' : '#ff6b6b') }
+                };
+                
+                Plotly.newPlot('dailyPnlChart', [trace], {
+                    paper_bgcolor: '#1a1f32',
+                    plot_bgcolor: '#1a1f32',
+                    font: { color: '#e0e5f0', size: 10 },
+                    margin: { l: 40, r: 10, t: 10, b: 40 },
+                    autosize: true,
+                    responsive: true
+                });
+            } catch (error) {
+                console.error("Erreur loadDailyStats:", error);
+            }
+        }
+        
+        async function loadHourlyStats() {
+            try {
+                const response = await fetch('/api/hourly');
+                const data = await response.json();
+                
+                const trace = {
+                    x: data.hours,
+                    y: data.pnls,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    line: { color: '#00d4aa', width: 2 },
+                    marker: { color: '#00d4aa', size: 4 }
+                };
+                
+                Plotly.newPlot('hourlyChart', [trace], {
+                    paper_bgcolor: '#1a1f32',
+                    plot_bgcolor: '#1a1f32',
+                    font: { color: '#e0e5f0', size: 10 },
+                    margin: { l: 40, r: 10, t: 10, b: 40 },
+                    autosize: true,
+                    responsive: true
+                });
+            } catch (error) {
+                console.error("Erreur loadHourlyStats:", error);
+            }
+        }
+        
+        async function loadStrengthStats() {
+            try {
+                const response = await fetch('/api/parameters');
+                const data = await response.json();
+                
+                const strengthData = data.by_signal_strength || {};
+                const strengths = Object.keys(strengthData);
+                const winrates = strengths.map(s => strengthData[s]?.winrate || 0);
+                
+                if (!strengths.length) {
+                    Plotly.purge('strengthChart');
+                    return;
+                }
+                
+                const trace = {
+                    x: strengths,
+                    y: winrates,
+                    type: 'bar',
+                    marker: { color: '#4a9eff' }
+                };
+                
+                Plotly.newPlot('strengthChart', [trace], {
+                    paper_bgcolor: '#1a1f32',
+                    plot_bgcolor: '#1a1f32',
+                    font: { color: '#e0e5f0', size: 10 },
+                    margin: { l: 40, r: 10, t: 10, b: 40 },
+                    autosize: true,
+                    responsive: true
+                });
+            } catch (error) {
+                console.error("Erreur loadStrengthStats:", error);
+            }
+        }
+        
+        async function loadTradesCount() {
+            try {
+                const response = await fetch('/api/daily_stats?days=30');
+                const data = await response.json();
+                
+                if (!data.dates?.length) {
+                    Plotly.purge('tradesCountChart');
+                    return;
+                }
+                
+                const trace = {
+                    x: data.dates,
+                    y: data.trades,
+                    type: 'bar',
+                    marker: { color: '#8892b0' }
+                };
+                
+                Plotly.newPlot('tradesCountChart', [trace], {
+                    paper_bgcolor: '#1a1f32',
+                    plot_bgcolor: '#1a1f32',
+                    font: { color: '#e0e5f0', size: 10 },
+                    margin: { l: 40, r: 10, t: 10, b: 40 },
+                    autosize: true,
+                    responsive: true
+                });
+                } catch (error) {
+                console.error("Erreur loadTradesCount:", error);
+            }
+        }
+        
+        async function loadRecentTrades() {
+            try {
+                const response = await fetch('/api/recent_trades?limit=20');
+                const trades = await response.json();
+                
+                const tbody = document.querySelector('#recentTrades tbody');
+                tbody.innerHTML = trades.map(t => `
+                    <tr>
+                        <td>${new Date(t.timestamp).toLocaleTimeString()}</td>
+                        <td><span class="badge badge-${t.side}">${t.side}</span></td>
+                        <td class="${t.pnl >= 0 ? 'positive' : 'negative'}">${t.pnl?.toFixed(2) || 0}%</td>
+                        <td><span class="badge badge-${t.result?.toLowerCase()}">${t.result}</span></td>
+                        <td>${t.exit_reason || '-'}</td>
+                    </tr>
+                `).join('');
+            } catch (error) {
+                console.error("Erreur loadRecentTrades:", error);
+            }
+        }
+        
+        async function loadRecentSignals() {
+            try {
+                const response = await fetch('/api/recent_signals?limit=20');
+                const signals = await response.json();
+                
+                const tbody = document.querySelector('#recentSignals tbody');
+                tbody.innerHTML = signals.map(s => `
+                    <tr>
+                        <td>${new Date(s.timestamp).toLocaleTimeString()}</td>
+                        <td><span class="badge badge-${s.signal}">${s.signal || 'none'}</span></td>
+                        <td>${s.strength}/3</td>
+                        <td>${s.executed ? '✅' : '❌'}</td>
+                        <td>${s.reason || '-'}</td>
+                    </tr>
+                `).join('');
+            } catch (error) {
+                console.error("Erreur loadRecentSignals:", error);
+            }
+        }
+
+        async function loadCurrentPositions() {
+            try {
+                const response = await fetch('/api/current_positions');
+                const data = await response.json();
+                
+                const tbody = document.querySelector('#positionsTable tbody');
+                const noPositions = document.getElementById('noPositions');
+                const totalSpan = document.getElementById('totalPnlPositions');
+                
+                if (!data.positions?.length) {
+                    tbody.innerHTML = '';
+                    noPositions.style.display = 'block';
+                    totalSpan.textContent = '';
+                    Plotly.purge('positionsMiniChart');
+                    return;
+                }
+                
+                noPositions.style.display = 'none';
+                
+                const totalPnl = data.total_pnl;
+                totalSpan.textContent = `P&L Total: ${totalPnl >= 0 ? '+' : ''}${totalPnl} USDT`;
+                totalSpan.style.color = totalPnl >= 0 ? '#00d4aa' : '#ff6b6b';
+                
+                tbody.innerHTML = data.positions.map(p => `
+                    <tr>
+                        <td>${p.symbol}</td>
+                        <td><span class="badge badge-${p.side}">${p.side}</span></td>
+                        <td>${p.entry_price}</td>
+                        <td>${p.current_price}</td>
+                        <td class="${p.pnl_percent >= 0 ? 'positive' : 'negative'}">${p.pnl_percent >= 0 ? '+' : ''}${p.pnl_percent}%</td>
+                        <td class="${p.pnl_usdt >= 0 ? 'positive' : 'negative'}">${p.pnl_usdt >= 0 ? '+' : ''}${p.pnl_usdt} USDT</td>
+                        <td>${p.duration}</td>
+                    </tr>
+                `).join('');
+                
+                const prices = data.positions.map(p => [p.entry_price, p.current_price]).flat();
+                const labels = data.positions.map(p => [`${p.side} Entry`, `${p.side} Current`]).flat();
+                const colors = data.positions.map(p => [
+                    p.side === 'long' ? '#4a9eff80' : '#ff9f4a80',
+                    p.side === 'long' ? '#4a9eff' : '#ff9f4a'
+                ]).flat();
+                
+                Plotly.newPlot('positionsMiniChart', [{
+                    x: labels,
+                    y: prices,
+                    type: 'bar',
+                    marker: { color: colors },
+                    text: prices.map(p => p.toFixed(2)),
+                    textposition: 'auto'
+                }], {
+                    paper_bgcolor: '#1a1f32',
+                    plot_bgcolor: '#1a1f32',
+                    font: { color: '#e0e5f0', size: 10 },
+                    margin: { l: 40, r: 10, t: 10, b: 40 },
+                    showlegend: false,
+                    autosize: true,
+                    responsive: true
+                });
+                
+            } catch (error) {
+                console.error("Erreur loadCurrentPositions:", error);
+            }
+        }
+
+        function refreshAll() {
+            loadOverview();
+            loadDailyStats();
+            loadHourlyStats();
+            loadStrengthStats();
+            loadTradesCount();
+            loadRecentTrades();
+            loadRecentSignals();
+            loadCurrentPositions();
+        }
+
+        // Initialisation
+        document.addEventListener('DOMContentLoaded', function() {
+            initTradingViewWidget('BINANCE:ETHUSDT');
+            refreshAll();
+            
+            const selector = document.getElementById('symbolSelector');
+            if (selector) {
+                selector.addEventListener('change', (e) => initTradingViewWidget(e.target.value));
+            }
+        });
+
+        // Rafraîchissement automatique
+        setInterval(refreshAll, 60000);
+        
+        // Gestion du redimensionnement
+        window.addEventListener('resize', () => {
+            ['dailyPnlChart', 'hourlyChart', 'strengthChart', 'tradesCountChart', 'positionsMiniChart'].forEach(chart => {
+                try { Plotly.relayout(chart, {}); } catch(e) {}
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+timestamp,bot_name,symbol,side,entry_price,exit_price,quantity,pnl_usdt,pnl_percent,result,duration_seconds,exit_reason,entry_signal_strength,entry_rsi,entry_macd,entry_stoch_k,entry_stoch_d,entry_bb_position,entry_atr_percent,entry_ema_trend,exit_rsi,exit_macd,max_favorable_price,max_adverse_price,trailing_activated,commission_paid,slippage_bps

@@ -1,0 +1,426 @@
+"""
+Stratégie avancée avec EMA, MACD, RSI, Stochastic, Bollinger Bands
+et OTE (Optimal Trade Entry) sur retracements Fibonacci
+"""
+import pandas as pd
+import numpy as np
+from datetime import datetime
+
+# =========================
+# ÉTAT GLOBAL
+# =========================
+_last_bios_level = None  # Dernier Break of Structure
+_last_bios_direction = None
+_ote_active = False
+_ote_entry_zone = None  # (zone_basse, zone_haute)
+
+def reset_state():
+    """Réinitialise l'état de la stratégie"""
+    global _last_bios_level, _last_bios_direction, _ote_active, _ote_entry_zone
+    _last_bios_level = None
+    _last_bios_direction = None
+    _ote_active = False
+    _ote_entry_zone = None
+
+def get_state():
+    """Retourne l'état actuel pour debug"""
+    return {
+        'bios_level': _last_bios_level,
+        'bios_direction': _last_bios_direction,
+        'ote_active': _ote_active,
+        'ote_zone': _ote_entry_zone
+    }
+
+def calculate_atr(df, period=14):
+    """Calcule l'ATR (Average True Range) pour la volatilité adaptative"""
+    high = df['high']
+    low = df['low']
+    close = df['close'].shift(1)
+    
+    tr1 = high - low
+    tr2 = abs(high - close)
+    tr3 = abs(low - close)
+    
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    
+    return atr
+
+def calculate_ema(df, period):
+    """Calcule EMA avec pandas"""
+    return df['close'].ewm(span=period, adjust=False).mean()
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    """Calcule MACD"""
+    ema_fast = calculate_ema(df, fast)
+    ema_slow = calculate_ema(df, slow)
+    
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    
+    return macd_line, signal_line, histogram
+
+def calculate_rsi(df, period=14):
+    """Calcule RSI"""
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    return rsi
+
+def calculate_stochastic(df, k_period=14, d_period=3):
+    """Calcule Stochastic Oscillator"""
+    low_min = df['low'].rolling(window=k_period).min()
+    high_max = df['high'].rolling(window=k_period).max()
+    
+    k = 100 * ((df['close'] - low_min) / (high_max - low_min))
+    d = k.rolling(window=d_period).mean()
+    
+    return k, d
+
+def calculate_bollinger_bands(df, period=20, std_dev=2):
+    """Calcule Bollinger Bands"""
+    sma = df['close'].rolling(window=period).mean()
+    std = df['close'].rolling(window=period).std()
+    
+    upper_band = sma + (std * std_dev)
+    lower_band = sma - (std * std_dev)
+    
+    return upper_band, sma, lower_band
+
+def detect_bios(df):
+    """
+    Détecte Break of Structure (BIOS)
+    - BIOS haussier: prix dépasse le dernier swing high
+    - BIOS baissier: prix casse le dernier swing low
+    """
+    if len(df) < 20:
+        return None
+    
+    # Détection swing points sur 5 périodes
+    highs = df['high'].rolling(window=5, center=True).max()
+    lows = df['low'].rolling(window=5, center=True).min()
+    
+    last_high = highs.iloc[-2]  # Éviter la bougie actuelle
+    last_low = lows.iloc[-2]
+    current_close = df['close'].iloc[-1]
+    
+    # BIOS haussier
+    if current_close > last_high and last_high > df['high'].iloc[-3]:
+        return {'direction': 'bullish', 'level': last_high}
+    
+    # BIOS baissier
+    if current_close < last_low and last_low < df['low'].iloc[-3]:
+        return {'direction': 'bearish', 'level': last_low}
+    
+    return None
+
+def calculate_fibonacci_retracement(swing_low, swing_high, level=0.618):
+    """
+    Calcule les niveaux Fibonacci
+    Niveaux clés: 0.382, 0.5, 0.618, 0.786
+    """
+    diff = swing_high - swing_low
+    
+    return {
+        '0.0': swing_low,
+        '0.382': swing_low + diff * 0.382,
+        '0.5': swing_low + diff * 0.5,
+        '0.618': swing_low + diff * 0.618,  # Golden Ratio
+        '0.786': swing_low + diff * 0.786,
+        '1.0': swing_high
+    }
+
+def detect_ote_zone(df, bios_direction, bios_level):
+    """
+    Détecte la zone OTE (Optimal Trade Entry) sur retracement Fibonacci
+    OTE = zone entre 0.618 et 0.786 du dernier mouvement
+    """
+    if len(df) < 30:
+        return None
+    
+    if bios_direction == 'bullish':
+        # Trouver le dernier swing low avant le BIOS
+        swings = df['low'].rolling(window=5, center=True).min()
+        swing_low = swings[swings == swings].iloc[-10:-2].min()
+        
+        if pd.isna(swing_low):
+            return None
+            
+        fibs = calculate_fibonacci_retracement(swing_low, bios_level)
+        ote_low = fibs['0.618']
+        ote_high = fibs['0.786']
+        
+        return {
+            'direction': 'long',
+            'entry_zone': (ote_low, ote_high),
+            'fibs': fibs
+        }
+        
+    elif bios_direction == 'bearish':
+        # Trouver le dernier swing high avant le BIOS
+        swings = df['high'].rolling(window=5, center=True).max()
+        swing_high = swings[swings == swings].iloc[-10:-2].max()
+        
+        if pd.isna(swing_high):
+            return None
+            
+        fibs = calculate_fibonacci_retracement(bios_level, swing_high)
+        ote_low = fibs['0.618']
+        ote_high = fibs['0.786']
+        
+        return {
+            'direction': 'short',
+            'entry_zone': (ote_low, ote_high),
+            'fibs': fibs
+        }
+    
+    return None
+
+def calculate_adaptive_thresholds(df):
+    """
+    Calcule des seuils adaptatifs basés sur la volatilité (ATR)
+    """
+    atr = calculate_atr(df)
+    current_atr = atr.iloc[-1]
+    current_price = df['close'].iloc[-1]
+    atr_pct = current_atr / current_price
+    
+    # Ajuster les seuils selon la volatilité
+    if atr_pct > 0.02:  # Forte volatilité (>2%)
+        rsi_overbought = 75
+        rsi_oversold = 25
+        stoch_overbought = 85
+        stoch_oversold = 15
+    elif atr_pct > 0.01:  # Volatilité moyenne (1-2%)
+        rsi_overbought = 70
+        rsi_oversold = 30
+        stoch_overbought = 80
+        stoch_oversold = 20
+    else:  # Faible volatilité (<1%)
+        rsi_overbought = 65
+        rsi_oversold = 35
+        stoch_overbought = 75
+        stoch_oversold = 25
+    
+    return {
+        'rsi_ob': rsi_overbought,
+        'rsi_os': rsi_oversold,
+        'stoch_ob': stoch_overbought,
+        'stoch_os': stoch_oversold,
+        'atr_pct': atr_pct
+    }
+
+def apply_indicators(df):
+    """
+    Applique tous les indicateurs techniques
+    """
+    df = df.copy()
+    
+    # EMAs
+    df['ema20'] = calculate_ema(df, 20)
+    df['ema50'] = calculate_ema(df, 50)
+    df['ema200'] = calculate_ema(df, 200)
+    
+    # MACD
+    df['macd'], df['macd_signal'], df['macd_hist'] = calculate_macd(df)
+    
+    # RSI
+    df['rsi'] = calculate_rsi(df)
+    
+    # Stochastic
+    df['stoch_k'], df['stoch_d'] = calculate_stochastic(df)
+    
+    # Bollinger Bands
+    df['bb_upper'], df['bb_middle'], df['bb_lower'] = calculate_bollinger_bands(df)
+    
+    # ATR
+    df['atr'] = calculate_atr(df)
+    
+    return df
+
+def detect_trend(df):
+    """
+    Détecte la tendance principale avec EMA 20/50
+    """
+    last = df.iloc[-1]
+    
+    if pd.isna(last['ema20']) or pd.isna(last['ema50']):
+        return None
+    
+    # Golden Cross (haussier)
+    if last['ema20'] > last['ema50'] and last['close'] > last['ema20']:
+        # Vérifier pente positive
+        ema_slope = (last['ema20'] - df['ema20'].iloc[-5]) / df['ema20'].iloc[-5]
+        if ema_slope > 0.0001:
+            return 'bullish'
+    
+    # Death Cross (baissier)
+    if last['ema20'] < last['ema50'] and last['close'] < last['ema20']:
+        ema_slope = (last['ema20'] - df['ema20'].iloc[-5]) / df['ema20'].iloc[-5]
+        if ema_slope < -0.0001:
+            return 'bearish'
+    
+    return None
+
+def detect_momentum_signal(df, trend):
+    """
+    Détecte les signaux de momentum (MACD, RSI, Stochastic)
+    """
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    # Seuils adaptatifs selon volatilité
+    thresholds = calculate_adaptive_thresholds(df)
+    
+    signals = []
+    
+    # MACD Crossover
+    if last['macd'] > last['macd_signal'] and prev['macd'] <= prev['macd_signal']:
+        signals.append('macd_bullish')
+    elif last['macd'] < last['macd_signal'] and prev['macd'] >= prev['macd_signal']:
+        signals.append('macd_bearish')
+    
+    # RSI
+    if trend == 'bullish' and last['rsi'] > 50 and last['rsi'] < thresholds['rsi_ob']:
+        signals.append('rsi_healthy_bull')
+    elif trend == 'bearish' and last['rsi'] < 50 and last['rsi'] > thresholds['rsi_os']:
+        signals.append('rsi_healthy_bear')
+    
+    # Stochastic
+    if last['stoch_k'] > last['stoch_d'] and last['stoch_k'] < thresholds['stoch_ob']:
+        signals.append('stoch_bullish')
+    elif last['stoch_k'] < last['stoch_d'] and last['stoch_k'] > thresholds['stoch_os']:
+        signals.append('stoch_bearish')
+    
+    # Bollinger Bands (zones d'exhaustion)
+    if last['close'] < last['bb_lower']:
+        signals.append('bb_oversold')
+    elif last['close'] > last['bb_upper']:
+        signals.append('bb_overbought')
+    
+    return signals
+
+def calculate_signal_strength(df, signal):
+    """
+    Calcule la force du signal (0-3)
+    """
+    if not signal:
+        return 0
+    
+    last = df.iloc[-1]
+    strength = 0
+    
+    # MACD
+    if (signal == 'long' and last['macd'] > last['macd_signal']) or \
+       (signal == 'short' and last['macd'] < last['macd_signal']):
+        strength += 1
+    
+    # RSI
+    if (signal == 'long' and 50 < last['rsi'] < 70) or \
+       (signal == 'short' and 30 < last['rsi'] < 50):
+        strength += 1
+    
+    # Stochastic
+    if (signal == 'long' and last['stoch_k'] > last['stoch_d']) or \
+       (signal == 'short' and last['stoch_k'] < last['stoch_d']):
+        strength += 1
+    
+    return strength
+
+def check_signal(df):
+    """
+    Point d'entrée principal
+    Combine BIOS, OTE, tendance et momentum
+    """
+    global _last_bios_level, _last_bios_direction, _ote_active, _ote_entry_zone
+    
+    if len(df) < 50:
+        return None
+    
+    # Appliquer indicateurs
+    df = apply_indicators(df)
+    
+    # Étape 1: Détecter tendance principale
+    trend = detect_trend(df)
+    if not trend:
+        return None
+    
+    # Étape 2: Détecter BIOS (Break of Structure)
+    bios = detect_bios(df)
+    if bios:
+        _last_bios_level = bios['level']
+        _last_bios_direction = bios['direction']
+        
+        # Étape 3: Calculer zone OTE sur retracement
+        ote_zone = detect_ote_zone(df, bios['direction'], bios['level'])
+        if ote_zone:
+            _ote_active = True
+            _ote_entry_zone = ote_zone['entry_zone']
+    
+    # Étape 4: Si OTE actif, vérifier si on est dans la zone
+    if _ote_active and _ote_entry_zone:
+        current_price = df['close'].iloc[-1]
+        zone_low, zone_high = _ote_entry_zone
+        
+        # Vérifier si le prix est dans la zone OTE
+        in_ote_zone = (zone_low <= current_price <= zone_high)
+        
+        if in_ote_zone:
+            # Étape 5: Vérifier confirmation momentum
+            momentum_signals = detect_momentum_signal(df, trend)
+            
+            # Logique d'entrée selon tendance
+            if trend == 'bullish' and _last_bios_direction == 'bullish':
+                # Signaux requis pour LONG
+                required_signals = ['macd_bullish', 'rsi_healthy_bull', 'stoch_bullish']
+                score = sum(1 for s in required_signals if s in momentum_signals)
+                
+                if score >= 2:  # Au moins 2 signaux sur 3
+                    print(f"📈 LONG signal in OTE zone | Score: {score}/3", flush=True)
+                    print(f"   Zone OTE: {zone_low:.2f}-{zone_high:.2f}", flush=True)
+                    return 'long'
+                    
+            elif trend == 'bearish' and _last_bios_direction == 'bearish':
+                # Signaux requis pour SHORT
+                required_signals = ['macd_bearish', 'rsi_healthy_bear', 'stoch_bearish']
+                score = sum(1 for s in required_signals if s in momentum_signals)
+                
+                if score >= 2:
+                    print(f"📉 SHORT signal in OTE zone | Score: {score}/3", flush=True)
+                    print(f"   Zone OTE: {zone_low:.2f}-{zone_high:.2f}", flush=True)
+                    return 'short'
+    
+    # Reset OTE si trop de temps passé
+    if _ote_active and len(df) > 0:
+        # Désactiver après 10 bougies
+        _ote_active = False
+        _ote_entry_zone = None
+    
+    return None
+
+def calculate_sl_tp_adaptive(entry_price, side, df):
+    """
+    Calcule SL/TP adaptatifs basés sur ATR
+    """
+    atr = df['atr'].iloc[-1]
+    atr_pct = atr / entry_price
+    
+    # SL = 1.5x ATR
+    sl_distance = atr * 1.5
+    
+    # TP = 3x ATR (risk/reward = 2:1)
+    tp_distance = atr * 3
+    
+    if side == 'long':
+        sl_price = entry_price - sl_distance
+        tp_price = entry_price + tp_distance
+    else:
+        sl_price = entry_price + sl_distance
+        tp_price = entry_price - tp_distance
+    
+    return round(sl_price, 2), round(tp_price, 2), atr_pct
