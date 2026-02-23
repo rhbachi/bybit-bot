@@ -145,27 +145,25 @@ def calculate_bollinger_bands(df, period=20, std_dev=2):
 
 def detect_bios(df):
     """
-    Détecte Break of Structure (BIOS)
-    - BIOS haussier: prix dépasse le dernier swing high
-    - BIOS baissier: prix casse le dernier swing low
+    Détecte Break of Structure (BIOS) - VERSION ASSOUPLIE POUR TEST
+    Seuil réduit à 0.2% pour voir plus de signaux
     """
     if len(df) < 20:
         return None
     
-    # Détection swing points sur 5 périodes
-    highs = df['high'].rolling(window=5, center=True).max()
-    lows = df['low'].rolling(window=5, center=True).min()
+    # Détection swing points sur 3 périodes (au lieu de 5)
+    highs = df['high'].rolling(window=3, center=True).max()
+    lows = df['low'].rolling(window=3, center=True).min()
     
     last_high = highs.iloc[-2]  # Éviter la bougie actuelle
     last_low = lows.iloc[-2]
     current_close = df['close'].iloc[-1]
     
-    # BIOS haussier
-    if current_close > last_high and last_high > df['high'].iloc[-3]:
+    # Seuil plus bas : 0.2% au lieu d'un vrai dépassement
+    if current_close > last_high * 1.002:  # 0.2% au-dessus
         return {'direction': 'bullish', 'level': last_high}
     
-    # BIOS baissier
-    if current_close < last_low and last_low < df['low'].iloc[-3]:
+    if current_close < last_low * 0.998:  # 0.2% en-dessous
         return {'direction': 'bearish', 'level': last_low}
     
     return None
@@ -490,7 +488,9 @@ def debug_check_signal(df):
         log_signal_to_file(signal_data)
         return None
     
-    logger.info(f"✅ BIOS détecté: {bios['direction']} at {bios['level']:.2f}")
+    # AJOUTEZ CETTE LIGNE POUR VOIR LES BIOS ASSOUPLIS
+    logger.info(f"✅ BIOS ASSOUPLI détecté: {bios['direction']} at {bios['level']:.2f}")
+
     
     # Vérifier zone OTE
     ote = detect_ote_zone(df, bios['direction'], bios['level'])
