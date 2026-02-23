@@ -77,6 +77,12 @@ def read_signals_from_bot():
             df = pd.read_csv('/app/logs/signals_log.csv')
             if not df.empty:
                 print("✅ Signaux lus depuis volume partagé", flush=True)
+                # Remplacer les NaN par des valeurs par défaut
+                df = df.fillna({
+                    'reason_not_executed': '',
+                    'signal': 'none',
+                    'signal_strength': 0
+                })
                 return df.tail(50).to_dict('records')
     except Exception as e:
         print(f"⚠️ Erreur lecture volume partagé: {e}", flush=True)
@@ -88,6 +94,11 @@ def read_signals_from_bot():
             df = pd.read_csv(local_path)
             if not df.empty:
                 print("✅ Signaux lus depuis logs local", flush=True)
+                df = df.fillna({
+                    'reason_not_executed': '',
+                    'signal': 'none',
+                    'signal_strength': 0
+                })
                 return df.tail(50).to_dict('records')
     except Exception as e:
         print(f"⚠️ Erreur lecture locale: {e}", flush=True)
@@ -121,12 +132,32 @@ def generate_test_signals(limit=20):
             'timestamp': (datetime.now() - timedelta(minutes=i*5)).isoformat(),
             'signal': signal_type,
             'price': round(2850 + random.uniform(-100, 100), 2),
-            'strength': random.randint(0, 3),
+            'strength': f"{random.randint(0, 3)}/3",
             'executed': is_executed,
             'reason': '' if is_executed else random.choice(reasons)
         })
     
     return test_signals
+
+def calculate_signal_strength_from_row(row):
+    """
+    Calcule une force de signal basée sur les indicateurs
+    """
+    if row.get('signal') not in ['long', 'short']:
+        return "0/3"
+    
+    strength = 0
+    # RSI
+    if 40 < row.get('rsi', 50) < 60:
+        strength += 1
+    # MACD (simplifié)
+    if abs(row.get('macd', 0)) > 1:
+        strength += 1
+    # Stochastic
+    if 20 < row.get('stoch_k', 50) < 80:
+        strength += 1
+    
+    return f"{strength}/3"
 
 # =========================
 # ROUTES PROTÉGÉES
@@ -209,19 +240,26 @@ def get_recent_trades():
     trades = []
     
     try:
-        if os.path.exists('logs/trades_detailed.csv'):
-            df = pd.read_csv('logs/trades_detailed.csv')
-            df = df.tail(limit)
-            for _, row in df.iterrows():
-                trades.append({
-                    'timestamp': row['timestamp'],
-                    'side': row['side'],
-                    'entry': row['entry_price'],
-                    'exit': row['exit_price'],
-                    'pnl': row['pnl_percent'],
-                    'result': row['result'],
-                    'exit_reason': row['exit_reason']
-                })
+        trades_paths = [
+            '/app/logs/trades_detailed.csv',
+            'logs/trades_detailed.csv'
+        ]
+        
+        for path in trades_paths:
+            if os.path.exists(path):
+                df = pd.read_csv(path)
+                df = df.tail(limit)
+                for _, row in df.iterrows():
+                    trades.append({
+                        'timestamp': row['timestamp'],
+                        'side': row['side'],
+                        'entry': round(row['entry_price'], 2),
+                        'exit': round(row['exit_price'], 2),
+                        'pnl': round(row['pnl_percent'], 2),
+                        'result': row['result'],
+                        'exit_reason': row['exit_reason']
+                    })
+                break
     except Exception as e:
         print(f"⚠️ Erreur lecture trades: {e}", flush=True)
     
@@ -230,19 +268,38 @@ def get_recent_trades():
 @app.route('/api/recent_signals')
 @requires_auth
 def get_recent_signals():
-    """API - Signaux récents (avec fallback automatique)"""
+    """API - Signaux récents avec formatage amélioré"""
     signals = read_signals_from_bot()
     
     # Formater pour le dashboard
     formatted_signals = []
-    for s in signals[:20]:  # Limiter à 20
+    for s in signals[:20]:
+        # Calculer la force du signal
+        if s.get('signal_strength', 0) > 0:
+            strength = f"{s.get('signal_strength', 0)}/3"
+        elif s.get('signal') in ['long', 'short']:
+            strength = "1/3"
+        else:
+            strength = "0/3"
+        
+        # Nettoyer la raison
+        reason = s.get('reason_not_executed', '')
+        if not reason and s.get('signal') == 'none':
+            # Deviner la raison basée sur les données
+            if 'bios_detected' in s and not s.get('bios_detected'):
+                reason = 'Pas de BIOS'
+            elif 'trend' in s and s.get('trend') == 'unknown':
+                reason = 'Pas de tendance'
+            else:
+                reason = 'Analyse en cours'
+        
         formatted_signals.append({
             'timestamp': s.get('timestamp', datetime.now().isoformat()),
             'signal': s.get('signal', 'none'),
-            'price': s.get('price', 0),
-            'strength': s.get('strength', s.get('signal_strength', 0)),
+            'price': round(s.get('price', 0), 2),
+            'strength': strength,
             'executed': s.get('executed', False),
-            'reason': s.get('reason', s.get('reason_not_executed', ''))
+            'reason': reason
         })
     
     return jsonify(formatted_signals)
@@ -291,6 +348,26 @@ def force_test_signals():
     """Force l'affichage de signaux de test (pour debug)"""
     return jsonify(generate_test_signals(20))
 
+@app.route('/api/debug_signals_raw')
+@requires_auth
+def debug_signals_raw():
+    """Affiche le contenu brut du fichier de signaux (debug)"""
+    try:
+        paths_to_try = [
+            '/app/logs/signals_log.csv',
+            'logs/signals_log.csv'
+        ]
+        
+        for path in paths_to_try:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    content = f.read()
+                return f"<pre>Fichier trouvé: {path}\n\n{content}</pre>"
+        
+        return "Fichier non trouvé dans aucun des chemins"
+    except Exception as e:
+        return f"Erreur: {e}"
+
 # =========================
 # LANCEMENT DU SERVEUR
 # =========================
@@ -300,6 +377,6 @@ if __name__ == '__main__':
     
     print(f"🚀 Dashboard démarré sur le port {port}")
     print(f"🔐 Authentification requise (utilisateur: {DASHBOARD_USERNAME})")
-    print(f"📊 Mode lecture signaux: Auto (fallback sur données test si nécessaire)")
+    print(f"📊 Mode lecture signaux: Auto avec formatage amélioré")
     
     app.run(debug=debug, host='0.0.0.0', port=port)
