@@ -28,19 +28,20 @@ DASHBOARD_USERNAME = os.getenv('DASHBOARD_USERNAME', 'admin')
 DASHBOARD_PASSWORD = os.getenv('DASHBOARD_PASSWORD', 'change_me_please')
 
 # URLs des bots (noms des services dans Coolify)
-# URLs des bots avec leurs IPs directes (d'après vos informations)
+# URLs des bots avec leurs NOMS de service Docker
 BOTS = [
     {
         'name': 'ZONE2_AI',
-        'url': 'http://10.0.1.13:5001/api/signals',  # IP du bot zone2
+        'url': 'http://bybit-bot-zone2:5001/api/signals',  # Nom du service
         'timeout': 2
     },
     {
         'name': 'MULTI_SYMBOL',
-        'url': 'http://10.0.1.14:5001/api/signals',  # NOUVELLE IP du multisymbol
+        'url': 'http://bybit-bot-multisymbol:5001/api/signals',  # Nom du service
         'timeout': 3
     }
 ]
+
 def check_auth(username, password):
     """Vérifie les identifiants"""
     return username == DASHBOARD_USERNAME and password == DASHBOARD_PASSWORD
