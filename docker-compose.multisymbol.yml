@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  bot-multisymbol:
+    build:
+      context: .
+      dockerfile: Dockerfile.multisymbol
+    environment:
+      - BYBIT_API_KEY=${BYBIT_API_KEY}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET}
+      - CAPITAL=${CAPITAL:-30}
+      - LEVERAGE=${LEVERAGE:-3}
+      - PAPER_TRADING=${PAPER_TRADING:-true}
+      - TIMEFRAME=${TIMEFRAME:-5m}
+      - MAX_POSITIONS=${MAX_POSITIONS:-1}
+      - SCORE_THRESHOLD=${SCORE_THRESHOLD:-2}
+      - COOLDOWN_SECONDS=${COOLDOWN_SECONDS:-300}
+    restart: unless-stopped
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
