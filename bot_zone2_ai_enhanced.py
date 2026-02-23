@@ -564,6 +564,60 @@ def run():
             print(f"❌ Erreur loop: {e}", flush=True)
             send_telegram(f"❌ Erreur: {e}")
             time.sleep(60)
+# =========================
+# API POUR LE DASHBOARD
+# =========================
+from flask import Flask, jsonify
+import threading
+import pandas as pd
+import os
+
+# Créer l'application Flask pour l'API
+api_app = Flask(__name__)
+
+@api_app.route('/api/signals')
+def get_signals():
+    """Endpoint pour le dashboard - retourne les 50 derniers signaux"""
+    try:
+        # Lire le fichier des signaux
+        if os.path.exists('/app/logs/signals_log.csv'):
+            df = pd.read_csv('/app/logs/signals_log.csv')
+            # Prendre les 50 derniers
+            df = df.tail(50)
+            # Convertir en dict
+            signals = df.to_dict('records')
+            
+            # Formater pour le dashboard
+            formatted_signals = []
+            for s in signals:
+                formatted_signals.append({
+                    'timestamp': s.get('timestamp', ''),
+                    'bot': 'ZONE2_AI',
+                    'signal': s.get('signal', 'none'),
+                    'price': s.get('price', 0),
+                    'strength': f"{s.get('signal_strength', 0)}/3",
+                    'executed': s.get('executed', False),
+                    'reason': s.get('reason_not_executed', '')
+                })
+            return jsonify(formatted_signals)
+        else:
+            return jsonify([])
+    except Exception as e:
+        print(f"❌ Erreur API signals: {e}", flush=True)
+        return jsonify([])
+
+@api_app.route('/api/health')
+def health():
+    """Endpoint de santé pour vérifier que le bot répond"""
+    return jsonify({'status': 'ok', 'bot': 'ZONE2_AI'})
+
+def run_api():
+    """Lance l'API Flask dans un thread séparé"""
+    print("🚀 API dashboard démarrée sur le port 5001", flush=True)
+    api_app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+
+# Lancer l'API au démarrage du bot
+threading.Thread(target=run_api, daemon=True).start()
 
 if __name__ == "__main__":
     run()

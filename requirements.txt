@@ -1,4 +1,5 @@
-﻿ccxt
+﻿txt
+ccxt
 pandas
 python-dotenv
 requests
