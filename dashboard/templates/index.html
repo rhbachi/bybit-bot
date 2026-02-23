@@ -416,6 +416,12 @@
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
     
     <script>
+        // Fonction pour générer une URL avec timestamp (évite le cache)
+        function addTimestamp(url) {
+            const separator = url.includes('?') ? '&' : '?';
+            return `${url}${separator}_=${new Date().getTime()}`;
+        }
+
         // Initialiser le widget TradingView
         function initTradingViewWidget(symbol = 'BINANCE:ETHUSDT') {
             const container = document.getElementById('tradingview_chart');
@@ -449,10 +455,10 @@
             });
         }
 
-        // Fonctions de chargement des données
+        // Fonctions de chargement des données avec anti-cache
         async function loadOverview() {
             try {
-                const response = await fetch('/api/overview');
+                const response = await fetch(addTimestamp('/api/overview'));
                 const data = await response.json();
                 
                 document.getElementById('lastUpdate').textContent = 
@@ -488,7 +494,7 @@
         
         async function loadDailyStats() {
             try {
-                const response = await fetch('/api/daily_stats?days=30');
+                const response = await fetch(addTimestamp('/api/daily_stats?days=30'));
                 const data = await response.json();
                 
                 if (!data.dates?.length) {
@@ -518,7 +524,7 @@
         
         async function loadHourlyStats() {
             try {
-                const response = await fetch('/api/hourly');
+                const response = await fetch(addTimestamp('/api/hourly'));
                 const data = await response.json();
                 
                 const trace = {
@@ -545,7 +551,7 @@
         
         async function loadStrengthStats() {
             try {
-                const response = await fetch('/api/parameters');
+                const response = await fetch(addTimestamp('/api/parameters'));
                 const data = await response.json();
                 
                 const strengthData = data.by_signal_strength || {};
@@ -579,7 +585,7 @@
         
         async function loadTradesCount() {
             try {
-                const response = await fetch('/api/daily_stats?days=30');
+                const response = await fetch(addTimestamp('/api/daily_stats?days=30'));
                 const data = await response.json();
                 
                 if (!data.dates?.length) {
@@ -609,7 +615,7 @@
         
         async function loadRecentTrades() {
             try {
-                const response = await fetch('/api/recent_trades?limit=20');
+                const response = await fetch(addTimestamp('/api/recent_trades?limit=20'));
                 const trades = await response.json();
                 
                 const tbody = document.querySelector('#recentTrades tbody');
@@ -629,7 +635,7 @@
         
         async function loadRecentSignals() {
             try {
-                const response = await fetch('/api/recent_signals?limit=20');
+                const response = await fetch(addTimestamp('/api/recent_signals?limit=20'));
                 const signals = await response.json();
                 
                 const tbody = document.querySelector('#recentSignals tbody');
@@ -658,7 +664,7 @@
 
         async function loadCurrentPositions() {
             try {
-                const response = await fetch('/api/current_positions');
+                const response = await fetch(addTimestamp('/api/current_positions'));
                 const data = await response.json();
                 
                 const tbody = document.querySelector('#positionsTable tbody');
@@ -721,6 +727,7 @@
         }
 
         function refreshAll() {
+            console.log("🔄 Rafraîchissement manuel à " + new Date().toLocaleTimeString());
             loadOverview();
             loadDailyStats();
             loadHourlyStats();
