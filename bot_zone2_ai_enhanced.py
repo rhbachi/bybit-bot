@@ -1,10 +1,68 @@
 """
 Bot Zone2 avec stratégie AI avancée (EMA, MACD, RSI, Stochastic, OTE Fibonacci)
+Version avec API Flask pour le dashboard
 """
 import time
 import pandas as pd
 from datetime import datetime, timezone
+import threading
+from flask import Flask, jsonify
+import os
 
+# =========================
+# API POUR LE DASHBOARD (LANCÉE EN PREMIER)
+# =========================
+api_app = Flask(__name__)
+
+@api_app.route('/api/health')
+def health():
+    """Endpoint de santé pour vérifier que le bot répond"""
+    return jsonify({'status': 'ok', 'bot': 'ZONE2_AI'})
+
+@api_app.route('/api/signals')
+def get_signals():
+    """Endpoint pour le dashboard - retourne les 50 derniers signaux"""
+    try:
+        if os.path.exists('/app/logs/signals_log.csv'):
+            df = pd.read_csv('/app/logs/signals_log.csv')
+            df = df.tail(50)
+            signals = df.to_dict('records')
+            
+            formatted_signals = []
+            for s in signals:
+                formatted_signals.append({
+                    'timestamp': s.get('timestamp', ''),
+                    'bot': 'ZONE2_AI',
+                    'signal': s.get('signal', 'none'),
+                    'price': s.get('price', 0),
+                    'strength': f"{s.get('signal_strength', 0)}/3",
+                    'executed': s.get('executed', False),
+                    'reason': s.get('reason_not_executed', '')
+                })
+            return jsonify(formatted_signals)
+        return jsonify([])
+    except Exception as e:
+        print(f"❌ Erreur API signals: {e}", flush=True)
+        return jsonify([])
+
+def run_api():
+    """Lance l'API Flask dans un thread séparé"""
+    try:
+        print("🚀 API dashboard démarrée sur le port 5001", flush=True)
+        api_app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+    except Exception as e:
+        print(f"❌ Erreur démarrage API: {e}", flush=True)
+        time.sleep(5)
+        threading.Thread(target=run_api, daemon=True).start()
+
+# LANCER L'API IMMÉDIATEMENT
+print("🔄 Lancement de l'API dashboard...", flush=True)
+threading.Thread(target=run_api, daemon=True).start()
+time.sleep(1)  # Petit délai pour laisser l'API démarrer
+
+# =========================
+# IMPORTS DU BOT
+# =========================
 from config import exchange, SYMBOL, CAPITAL, LEVERAGE
 from risk_improved import calculate_position_size
 from notifier import send_telegram
@@ -18,30 +76,15 @@ from strategy_ai_enhanced import (
 # =========================
 # PARAMÈTRES AVEC VARIABLES D'ENV
 # =========================
-import os
-
-# Timeframe
 TIMEFRAME = os.getenv('TIMEFRAME', '5m')
-
-# Filtre doji
-MIN_BODY_PCT = float(os.getenv('MIN_BODY_PCT', '0.0005'))  # 0.05% par défaut
-
-# Cooldown entre trades
+MIN_BODY_PCT = float(os.getenv('MIN_BODY_PCT', '0.0005'))
 COOLDOWN_SECONDS = int(os.getenv('COOLDOWN_SECONDS', '60'))
-
-# Mode papier trading
 PAPER_TRADING = os.getenv('PAPER_TRADING', 'true').lower() == 'true'
-
-# Trailing stop
-TRAILING_STOP_ACTIVATION = float(os.getenv('TRAILING_STOP_ACTIVATION', '0.01'))  # 1%
-TRAILING_STOP_DISTANCE = float(os.getenv('TRAILING_STOP_DISTANCE', '0.005'))    # 0.5%
-
-# Circuit breaker
+TRAILING_STOP_ACTIVATION = float(os.getenv('TRAILING_STOP_ACTIVATION', '0.01'))
+TRAILING_STOP_DISTANCE = float(os.getenv('TRAILING_STOP_DISTANCE', '0.005'))
 MAX_DAILY_LOSS_PCT = float(os.getenv('MAX_DAILY_LOSS_PCT', '5'))
 MAX_CONSECUTIVE_LOSSES = int(os.getenv('MAX_CONSECUTIVE_LOSSES', '3'))
-
-# Risk management
-RISK_PER_TRADE = float(os.getenv('RISK_PER_TRADE', '0.02'))  # 2% par défaut
+RISK_PER_TRADE = float(os.getenv('RISK_PER_TRADE', '0.02'))
 
 # =========================
 # ÉTAT
@@ -54,19 +97,17 @@ current_trade = {
     "sl_price": 0,
     "tp_price": 0,
     "entry_time": None,
-    "highest_price": 0,   # Pour trailing stop
-    "lowest_price": 0,    # Pour trailing stop
+    "highest_price": 0,
+    "lowest_price": 0,
     "trailing_activated": False
 }
 
-# Stats
 consecutive_losses = 0
 daily_pnl = 0
 initial_capital = CAPITAL
 last_trade_time = None
 total_trades = 0
 
-# Logger amélioré
 enhanced_logger = get_logger("ZONE2_AI")
 
 # =========================
@@ -108,7 +149,7 @@ def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
             'stopLoss': str(sl_price),
             'takeProfit': str(tp_price),
             'tpTriggerBy': 'LastPrice',
-            'slTriggerBy': 'LastPrice',
+            'slTriggerBy': 'MarkPrice',
             'tpslMode': 'Full',
             'tpOrderType': 'Limit',
             'slOrderType': 'Market',
@@ -128,11 +169,9 @@ def update_trailing_stop(symbol, side, qty, current_price, current_sl):
         return current_sl
     
     if side == 'long':
-        # Mettre à jour le plus haut
         if current_price > current_trade['highest_price']:
             current_trade['highest_price'] = current_price
             
-        # Vérifier si on peut trailing
         gain_pct = (current_price - current_trade['entry_price']) / current_trade['entry_price']
         
         if gain_pct > TRAILING_STOP_ACTIVATION:
@@ -144,7 +183,7 @@ def update_trailing_stop(symbol, side, qty, current_price, current_sl):
                         'category': 'linear',
                         'symbol': symbol.replace('/', '').replace(':USDT', ''),
                         'stopLoss': str(new_sl),
-                        'slTriggerBy': 'LastPrice',
+                        'slTriggerBy': 'MarkPrice',
                         'positionIdx': 0,
                     })
                     return new_sl
@@ -166,7 +205,7 @@ def update_trailing_stop(symbol, side, qty, current_price, current_sl):
                         'category': 'linear',
                         'symbol': symbol.replace('/', '').replace(':USDT', ''),
                         'stopLoss': str(new_sl),
-                        'slTriggerBy': 'LastPrice',
+                        'slTriggerBy': 'MarkPrice',
                         'positionIdx': 0,
                     })
                     return new_sl
@@ -179,20 +218,12 @@ def check_circuit_breaker():
     """Vérifie si on doit arrêter le trading"""
     global consecutive_losses, initial_capital
     
-    # Si pas encore de trades, on ne déclenche pas le circuit breaker
-    if total_trades == 0:
-        return False, "OK - Premier démarrage"
+    if total_trades < 5:
+        return False, "OK - Phase de chauffe"
     
-    # Perte journalière max
     current_balance = get_available_balance()
-    
-    # Éviter division par zéro ou valeurs négatives
-    if initial_capital <= 0:
-        initial_capital = current_balance
-    
     daily_loss_pct = (initial_capital - current_balance) / initial_capital * 100 if initial_capital > 0 else 0
     
-    # Ne pas déclencher si c'est une perte infime (arrondis)
     if daily_loss_pct > MAX_DAILY_LOSS_PCT and daily_loss_pct < 100:
         msg = f"🚨 CIRCUIT BREAKER: Perte journalière {daily_loss_pct:.1f}% > {MAX_DAILY_LOSS_PCT}%"
         print(msg, flush=True)
@@ -200,7 +231,6 @@ def check_circuit_breaker():
         enhanced_logger.log_error(msg)
         return True, f"Daily loss: {daily_loss_pct:.1f}%"
     
-    # Pertes consécutives
     if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
         msg = f"🚨 CIRCUIT BREAKER: {consecutive_losses} pertes consécutives"
         print(msg, flush=True)
@@ -212,17 +242,14 @@ def check_circuit_breaker():
 
 def check_signal_with_logging(df):
     """Wrapper pour logger tous les signaux"""
-    # Appliquer les indicateurs d'abord
+    from strategy_ai_enhanced import debug_check_signal, detect_trend, get_state, calculate_signal_strength
+    
     df_with_indicators = apply_indicators(df)
+    signal = debug_check_signal(df_with_indicators)
     
-    # Détecter le signal
-    signal = check_signal(df_with_indicators)
-    
-    # Préparer les données pour le log
     last_row = df_with_indicators.iloc[-1] if not df_with_indicators.empty else None
     
     if last_row is not None:
-        # Calculer la position dans les bandes
         bb_position = 0
         if 'bb_upper' in last_row and 'bb_lower' in last_row:
             bb_range = last_row['bb_upper'] - last_row['bb_lower']
@@ -242,8 +269,8 @@ def check_signal_with_logging(df):
             'ote_zone': get_state().get('ote_active', False),
             'bios_detected': get_state().get('bios_level') is not None,
             'signal_strength': calculate_signal_strength(df_with_indicators, signal) if signal else 0,
-            'executed': False,
-            'reason_not_executed': ''
+            'executed': False if not signal else False,
+            'reason_not_executed': 'Signal non exécuté' if not signal else ''
         }
         
         enhanced_logger.log_signal(signal_data)
@@ -267,7 +294,6 @@ def run():
     
     init_logger()
     
-    # Configuration leverage
     if not PAPER_TRADING:
         try:
             exchange.set_leverage(LEVERAGE, SYMBOL)
@@ -276,7 +302,6 @@ def run():
             if "110043" not in str(e):
                 print(f"⚠️ Erreur leverage: {e}", flush=True)
     
-    # Notification démarrage
     mode = "📝 PAPER" if PAPER_TRADING else "💰 REAL"
     send_telegram(
         f"🤖 ZONE2 AI ENHANCED {mode}\n"
@@ -288,58 +313,44 @@ def run():
     
     while True:
         try:
-            # Circuit breaker - seulement après quelques trades
-            if total_trades > 5:  # Attendre d'avoir au moins 5 trades
+            if total_trades > 5:
                 should_stop, reason = check_circuit_breaker()
                 if should_stop:
                     print(f"⛔ Trading arrêté: {reason}", flush=True)
-                    time.sleep(300)  # 5 minutes
+                    time.sleep(300)
                     continue
             else:
                 print(f"⏳ Phase de chauffe: {total_trades}/5 trades avant activation circuit breaker", flush=True)
             
-            # Cooldown
             if last_trade_time and time.time() - last_trade_time < COOLDOWN_SECONDS:
                 time.sleep(10)
                 continue
             
-            # Récupérer données
             df = fetch_ohlcv(limit=100)
             if df.empty:
                 print("⚠️ Pas de données OHLCV", flush=True)
                 time.sleep(60)
                 continue
             
-            # Vérifier signal avec logging
             signal, df_with_indicators = check_signal_with_logging(df)
             
-            # Trading
             if not in_position and signal:
                 print(f"🎯 Signal détecté: {signal.upper()}", flush=True)
                 
-                # Vérifier solde
                 available = get_available_balance()
                 if available < 5:
                     print("❌ Solde insuffisant", flush=True)
                     time.sleep(60)
                     continue
                 
-                # Capital effectif
                 effective_capital = min(CAPITAL, available * 0.95)
-                
-                # Prix actuel
                 current_price = df_with_indicators['close'].iloc[-1]
+                sl_price, tp_price, atr_pct = calculate_sl_tp_adaptive(current_price, signal, df_with_indicators)
                 
-                # Calculer SL/TP adaptatifs
-                sl_price, tp_price, atr_pct = calculate_sl_tp_adaptive(
-                    current_price, signal, df_with_indicators
-                )
-                
-                # Calculer taille position
                 qty = calculate_position_size(
                     effective_capital,
-                    0.02,  # 2% risque
-                    abs(current_price - sl_price) / current_price,  # SL pct
+                    0.02,
+                    abs(current_price - sl_price) / current_price,
                     current_price,
                     LEVERAGE
                 )
@@ -349,12 +360,10 @@ def run():
                     time.sleep(60)
                     continue
                 
-                # Ouvrir position
                 order_side = "buy" if signal == "long" else "sell"
                 print(f"📊 Ouverture {signal.upper()} | Qty={qty}", flush=True)
                 
                 try:
-                    # Simuler ou réel
                     if PAPER_TRADING:
                         print(f"📝 PAPER - Ordre {order_side} {qty} {SYMBOL} à {current_price}", flush=True)
                         order_success = True
@@ -363,13 +372,9 @@ def run():
                         order_success = True
                     
                     if order_success:
-                        # Placer SL/TP
-                        success = place_sl_tp_orders(
-                            SYMBOL, signal, qty, current_price, sl_price, tp_price
-                        )
+                        success = place_sl_tp_orders(SYMBOL, signal, qty, current_price, sl_price, tp_price)
                         
                         if success:
-                            # Mettre à jour état
                             in_position = True
                             last_trade_time = time.time()
                             
@@ -385,7 +390,6 @@ def run():
                                 "trailing_activated": False
                             }
                             
-                            # Notification
                             msg = (
                                 f"🟢 TRADE OUVERT ({signal.upper()})\n"
                                 f"Prix: {current_price:.2f}\n"
@@ -399,7 +403,6 @@ def run():
                             send_telegram(msg)
                             
                         else:
-                            # Fermer si SL/TP échouent
                             if not PAPER_TRADING:
                                 close_side = "sell" if signal == "long" else "buy"
                                 exchange.create_market_order(SYMBOL, close_side, qty, params={'reduceOnly': True})
@@ -410,11 +413,9 @@ def run():
                     enhanced_logger.log_error("Erreur execution ordre", e)
                     print(f"❌ Erreur execution: {e}", flush=True)
             
-            # Gestion position ouverte
             elif in_position:
                 current_price = df_with_indicators['close'].iloc[-1]
                 
-                # Mettre à jour trailing stop
                 new_sl = update_trailing_stop(
                     SYMBOL,
                     current_trade['side'],
@@ -427,9 +428,7 @@ def run():
                     current_trade['sl_price'] = new_sl
                     current_trade['trailing_activated'] = True
                 
-                # Vérifier si position encore ouverte
                 if PAPER_TRADING:
-                    # En mode papier, simuler la fermeture
                     if current_trade['side'] == 'long':
                         if current_price <= current_trade['sl_price'] or current_price >= current_trade['tp_price']:
                             position_closed = True
@@ -437,7 +436,7 @@ def run():
                         else:
                             position_closed = False
                             exit_reason = None
-                    else:  # short
+                    else:
                         if current_price >= current_trade['sl_price'] or current_price <= current_trade['tp_price']:
                             position_closed = True
                             exit_reason = "SL" if current_price >= current_trade['sl_price'] else "TP"
@@ -445,7 +444,6 @@ def run():
                             position_closed = False
                             exit_reason = None
                 else:
-                    # Mode réel - vérifier via API
                     try:
                         positions = exchange.fetch_positions([SYMBOL])
                         pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
@@ -457,10 +455,8 @@ def run():
                         exit_reason = None
                 
                 if position_closed:
-                    # Position fermée
                     print(f"🔔 Position fermée par {exit_reason}", flush=True)
                     
-                    # Calculer P&L
                     if current_trade['side'] == 'long':
                         pnl_pct = (current_price - current_trade['entry_price']) / current_trade['entry_price'] * 100
                         pnl_usdt = (current_price - current_trade['entry_price']) * current_trade['qty']
@@ -470,7 +466,6 @@ def run():
                     
                     result = "WIN" if pnl_pct > 0 else "LOSS"
                     
-                    # Mettre à jour stats
                     if result == "LOSS":
                         consecutive_losses += 1
                     else:
@@ -478,7 +473,6 @@ def run():
                     
                     total_trades += 1
                     
-                    # Log détaillé
                     trade_data = {
                         'timestamp': datetime.now().isoformat(),
                         'bot_name': 'ZONE2_AI',
@@ -492,13 +486,13 @@ def run():
                         'result': result,
                         'duration_seconds': (datetime.now(timezone.utc) - current_trade['entry_time']).seconds,
                         'exit_reason': exit_reason or 'unknown',
-                        'entry_signal_strength': 2,  # À améliorer
+                        'entry_signal_strength': 2,
                         'entry_rsi': df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators else 0,
                         'entry_macd': df_with_indicators['macd'].iloc[-1] if 'macd' in df_with_indicators else 0,
                         'entry_stoch_k': df_with_indicators['stoch_k'].iloc[-1] if 'stoch_k' in df_with_indicators else 0,
                         'entry_stoch_d': df_with_indicators['stoch_d'].iloc[-1] if 'stoch_d' in df_with_indicators else 0,
-                        'entry_bb_position': 0,  # À calculer
-                        'entry_atr_percent': 0,  # À calculer
+                        'entry_bb_position': 0,
+                        'entry_atr_percent': 0,
                         'entry_ema_trend': detect_trend(df_with_indicators) or '',
                         'exit_rsi': df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators else 0,
                         'exit_macd': df_with_indicators['macd'].iloc[-1] if 'macd' in df_with_indicators else 0,
@@ -510,26 +504,15 @@ def run():
                     }
                     
                     enhanced_logger.log_trade_detailed(trade_data)
+                    log_trade(SYMBOL, current_trade['side'], current_trade['qty'], 
+                             current_trade['entry_price'], current_price, pnl_pct, result)
                     
-                    # Logger standard
-                    log_trade(
-                        SYMBOL,
-                        current_trade['side'],
-                        current_trade['qty'],
-                        current_trade['entry_price'],
-                        current_price,
-                        pnl_pct,
-                        result
-                    )
-                    
-                    # Mettre à jour métriques performance
                     enhanced_logger.update_performance_metrics({
                         'total_trades': total_trades,
-                        'win_rate': 0,  # À calculer
+                        'win_rate': 0,
                         'daily_pnl': daily_pnl
                     })
                     
-                    # Notification
                     duration = (datetime.now(timezone.utc) - current_trade['entry_time']).seconds
                     msg = (
                         f"{'🟢 WIN' if pnl_pct>0 else '🔴 LOSS'} - TRADE FERMÉ\n"
@@ -542,7 +525,6 @@ def run():
                     )
                     send_telegram(msg)
                     
-                    # Reset
                     in_position = False
                     current_trade = {
                         "entry_price": 0,
@@ -556,7 +538,6 @@ def run():
                         "trailing_activated": False
                     }
             
-            # Attendre 5 minutes (timeframe 5m)
             time.sleep(300)
             
         except Exception as e:
@@ -564,60 +545,6 @@ def run():
             print(f"❌ Erreur loop: {e}", flush=True)
             send_telegram(f"❌ Erreur: {e}")
             time.sleep(60)
-# =========================
-# API POUR LE DASHBOARD
-# =========================
-from flask import Flask, jsonify
-import threading
-import pandas as pd
-import os
-
-# Créer l'application Flask pour l'API
-api_app = Flask(__name__)
-
-@api_app.route('/api/signals')
-def get_signals():
-    """Endpoint pour le dashboard - retourne les 50 derniers signaux"""
-    try:
-        # Lire le fichier des signaux
-        if os.path.exists('/app/logs/signals_log.csv'):
-            df = pd.read_csv('/app/logs/signals_log.csv')
-            # Prendre les 50 derniers
-            df = df.tail(50)
-            # Convertir en dict
-            signals = df.to_dict('records')
-            
-            # Formater pour le dashboard
-            formatted_signals = []
-            for s in signals:
-                formatted_signals.append({
-                    'timestamp': s.get('timestamp', ''),
-                    'bot': 'ZONE2_AI',
-                    'signal': s.get('signal', 'none'),
-                    'price': s.get('price', 0),
-                    'strength': f"{s.get('signal_strength', 0)}/3",
-                    'executed': s.get('executed', False),
-                    'reason': s.get('reason_not_executed', '')
-                })
-            return jsonify(formatted_signals)
-        else:
-            return jsonify([])
-    except Exception as e:
-        print(f"❌ Erreur API signals: {e}", flush=True)
-        return jsonify([])
-
-@api_app.route('/api/health')
-def health():
-    """Endpoint de santé pour vérifier que le bot répond"""
-    return jsonify({'status': 'ok', 'bot': 'ZONE2_AI'})
-
-def run_api():
-    """Lance l'API Flask dans un thread séparé"""
-    print("🚀 API dashboard démarrée sur le port 5001", flush=True)
-    api_app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
-
-# Lancer l'API au démarrage du bot
-threading.Thread(target=run_api, daemon=True).start()
 
 if __name__ == "__main__":
     run()
