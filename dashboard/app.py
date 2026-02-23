@@ -80,34 +80,39 @@ def fetch_signals_from_bots():
     """
     all_signals = []
     
-    print(f"🔍 Interrogation des bots à {datetime.now().strftime('%H:%M:%S')}", flush=True)
+    print(f"\n🔍 Interrogation des bots à {datetime.now().strftime('%H:%M:%S')}", flush=True)
     
     for bot in BOTS:
         try:
+            print(f"   → Tentative de connexion à {bot['name']}: {bot['url']}", flush=True)
             response = requests.get(bot['url'], timeout=bot['timeout'])
             
             if response.status_code == 200:
                 signals = response.json()
-                # Ajouter le nom du bot si non présent
-                for signal in signals:
-                    if 'bot' not in signal:
-                        signal['bot'] = bot['name']
-                all_signals.extend(signals)
-                print(f"✅ {bot['name']}: {len(signals)} signaux reçus", flush=True)
-            else:
-                print(f"⚠️ {bot['name']}: code {response.status_code}", flush=True)
+                print(f"   ✅ {bot['name']}: {len(signals)} signaux reçus", flush=True)
                 
-        except requests.exceptions.ConnectionError:
-            print(f"❌ {bot['name']}: Connexion refusée (bot pas encore démarré?)", flush=True)
-        except requests.exceptions.Timeout:
-            print(f"⏰ {bot['name']}: Timeout (trop lent)", flush=True)
+                # Les signaux ont déjà le champ 'bot' depuis l'API du bot
+                # On les ajoute directement
+                all_signals.extend(signals)
+            else:
+                print(f"   ⚠️ {bot['name']}: code {response.status_code}", flush=True)
+                
         except Exception as e:
-            print(f"❌ {bot['name']}: Erreur {e}", flush=True)
+            print(f"   ❌ {bot['name']}: Erreur {e}", flush=True)
+    
+    print(f"   Total signaux reçus: {len(all_signals)}", flush=True)
     
     # Trier par date (plus récent d'abord)
     all_signals.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     
-    return all_signals
+    # Si on a reçu des signaux, on les retourne
+    if all_signals:
+        print(f"   ✅ Utilisation des {len(all_signals)} signaux des bots", flush=True)
+        return all_signals
+    
+    # Sinon, données de test
+    print(f"   ⚠️ Aucun signal reçu - utilisation des données de test", flush=True)
+    return generate_test_signals()
 
 def generate_test_signals():
     """Génère des signaux de test EN DERNIER RECOURS"""
@@ -219,22 +224,25 @@ def get_recent_signals():
     # Récupérer les signaux depuis les bots
     signals = fetch_signals_from_bots()
     
-    # Si aucun bot disponible, utiliser des données de test
-    if not signals:
-        signals = generate_test_signals()
+    print(f"   → Formatage de {len(signals)} signaux pour le dashboard", flush=True)
     
     # Limiter et formater
     formatted_signals = []
     for s in signals[:limit]:
+        # S'assurer que le champ bot est présent
+        bot_name = s.get('bot', 'unknown')
+        
         formatted_signals.append({
             'timestamp': s.get('timestamp', datetime.now().isoformat()),
-            'bot': s.get('bot', 'unknown'),
+            'bot': bot_name,
             'signal': s.get('signal', 'none'),
             'price': s.get('price', 0),
             'strength': s.get('strength', '0/3'),
             'executed': s.get('executed', False),
             'reason': s.get('reason', '')
         })
+    
+    print(f"   → Envoi de {len(formatted_signals)} signaux formatés", flush=True)
     
     return jsonify(formatted_signals)
 
