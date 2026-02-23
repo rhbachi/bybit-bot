@@ -196,6 +196,19 @@
         .badge-long { background: #4a9eff20; color: #4a9eff; }
         .badge-short { background: #ff9f4a20; color: #ff9f4a; }
         
+        /* Badges pour les bots */
+        .badge-bot {
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            display: inline-block;
+        }
+        
+        .badge-bot-zone2 { background: #4a9eff20; color: #4a9eff; }
+        .badge-bot-main { background: #00d4aa20; color: #00d4aa; }
+        .badge-bot-multi { background: #ff9f4a20; color: #ff9f4a; }
+        .badge-bot-unknown { background: #8892b020; color: #8892b0; }
+        
         /* Positions */
         .positions-chart {
             height: 120px;
@@ -275,7 +288,7 @@
                 font-size: 11px;
             }
             
-            .badge {
+            .badge, .badge-bot {
                 padding: 2px 4px;
                 font-size: 10px;
             }
@@ -385,6 +398,7 @@
                         <thead>
                             <tr>
                                 <th>Heure</th>
+                                <th>Bot</th>
                                 <th>Signal</th>
                                 <th>Force</th>
                                 <th>Exec</th>
@@ -619,15 +633,24 @@
                 const signals = await response.json();
                 
                 const tbody = document.querySelector('#recentSignals tbody');
-                tbody.innerHTML = signals.map(s => `
-                    <tr>
-                        <td>${new Date(s.timestamp).toLocaleTimeString()}</td>
-                        <td><span class="badge badge-${s.signal}">${s.signal || 'none'}</span></td>
-                        <td>${s.strength}/3</td>
-                        <td>${s.executed ? '✅' : '❌'}</td>
-                        <td>${s.reason || '-'}</td>
-                    </tr>
-                `).join('');
+                tbody.innerHTML = signals.map(s => {
+                    // Déterminer la classe CSS pour le bot
+                    let botClass = 'badge-bot-unknown';
+                    if (s.bot === 'ZONE2_AI') botClass = 'badge-bot-zone2';
+                    else if (s.bot === 'MAIN_AI') botClass = 'badge-bot-main';
+                    else if (s.bot === 'MULTI_SYMBOL') botClass = 'badge-bot-multi';
+                    
+                    return `
+                        <tr>
+                            <td>${new Date(s.timestamp).toLocaleTimeString()}</td>
+                            <td><span class="badge-bot ${botClass}">${s.bot || 'unknown'}</span></td>
+                            <td><span class="badge badge-${s.signal}">${s.signal || 'none'}</span></td>
+                            <td>${s.strength}</td>
+                            <td>${s.executed ? '✅' : '❌'}</td>
+                            <td>${s.reason || '-'}</td>
+                        </tr>
+                    `;
+                }).join('');
             } catch (error) {
                 console.error("Erreur loadRecentSignals:", error);
             }
