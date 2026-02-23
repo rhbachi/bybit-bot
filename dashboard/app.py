@@ -37,7 +37,7 @@ BOTS = [
     },
     {
         'name': 'MULTI_SYMBOL',
-        'url': 'http://10.0.1.10:5001/api/signals',  # IP du bot multisymbol
+        'url': 'http://10.0.1.14:5001/api/signals',  # NOUVELLE IP du multisymbol
         'timeout': 3
     }
 ]
