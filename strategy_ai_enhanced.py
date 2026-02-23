@@ -1,13 +1,14 @@
 """
 Stratégie avancée avec EMA, MACD, RSI, Stochastic, Bollinger Bands
 et OTE (Optimal Trade Entry) sur retracements Fibonacci
-Version avec logs de débogage
+Version avec logs de débogage et export CSV pour dashboard
 """
 import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
 import logging
+import csv
 
 # Configuration des logs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -37,6 +38,49 @@ def get_state():
         'ote_active': _ote_active,
         'ote_zone': _ote_entry_zone
     }
+
+def log_signal_to_file(signal_data):
+    """Enregistre un signal dans le fichier CSV du dashboard"""
+    try:
+        signal_file = "logs/signals_log.csv"
+        
+        # S'assurer que le dossier logs existe
+        os.makedirs("logs", exist_ok=True)
+        
+        # Créer le fichier avec en-tête s'il n'existe pas
+        if not os.path.exists(signal_file):
+            with open(signal_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'timestamp', 'bot_name', 'symbol', 'signal', 'price',
+                    'trend', 'rsi', 'macd', 'stoch_k', 'stoch_d',
+                    'bb_position', 'ote_zone', 'bios_detected',
+                    'signal_strength', 'executed', 'reason_not_executed'
+                ])
+        
+        # Ajouter le signal
+        with open(signal_file, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                signal_data.get('timestamp', datetime.now().isoformat()),
+                signal_data.get('bot_name', 'ZONE2_AI'),
+                signal_data.get('symbol', 'UNKNOWN'),
+                signal_data.get('signal', 'none'),
+                signal_data.get('price', 0),
+                signal_data.get('trend', 'unknown'),
+                signal_data.get('rsi', 0),
+                signal_data.get('macd', 0),
+                signal_data.get('stoch_k', 0),
+                signal_data.get('stoch_d', 0),
+                signal_data.get('bb_position', 0),
+                signal_data.get('ote_zone', False),
+                signal_data.get('bios_detected', False),
+                signal_data.get('signal_strength', 0),
+                signal_data.get('executed', False),
+                signal_data.get('reason_not_executed', '')
+            ])
+    except Exception as e:
+        logger.error(f"Erreur lors du log du signal: {e}")
 
 def calculate_atr(df, period=14):
     """Calcule l'ATR (Average True Range) pour la volatilité adaptative"""
@@ -376,45 +420,86 @@ def calculate_sl_tp_adaptive(entry_price, side, df):
         sl_price = entry_price + sl_distance
         tp_price = entry_price - tp_distance
     
-    # Calcul du ratio RR réel
-    rr_ratio = tp_atr_multiplier / sl_atr_multiplier
-    
     return round(sl_price, 2), round(tp_price, 2), atr_pct
 
 def debug_check_signal(df):
     """Version debug de check_signal qui explique pourquoi pas de signal"""
     
+    # Créer les données de base pour le signal
+    signal_data = {
+        'bot_name': 'ZONE2_AI',
+        'symbol': os.getenv('SYMBOL', 'UNKNOWN'),
+        'timestamp': datetime.now().isoformat(),
+        'price': df['close'].iloc[-1] if not df.empty else 0,
+        'trend': 'unknown',
+        'rsi': 0,
+        'macd': 0,
+        'stoch_k': 0,
+        'stoch_d': 0,
+        'bb_position': 0,
+        'ote_zone': False,
+        'bios_detected': False,
+        'signal_strength': 0,
+        'executed': False,
+        'reason_not_executed': ''
+    }
+    
     if len(df) < 50:
         logger.info("❌ Pas assez de données: %d/50 bougies", len(df))
+        signal_data['reason_not_executed'] = 'Pas assez de données'
+        log_signal_to_file(signal_data)
         return None
     
     # Appliquer indicateurs
     df = apply_indicators(df)
     
+    # Mettre à jour les valeurs des indicateurs
+    last = df.iloc[-1]
+    signal_data['rsi'] = last.get('rsi', 0)
+    signal_data['macd'] = last.get('macd', 0)
+    signal_data['stoch_k'] = last.get('stoch_k', 0)
+    signal_data['stoch_d'] = last.get('stoch_d', 0)
+    
+    # Calculer position BB
+    if 'bb_upper' in last and 'bb_lower' in last:
+        bb_range = last['bb_upper'] - last['bb_lower']
+        if bb_range > 0:
+            signal_data['bb_position'] = (last['close'] - last['bb_lower']) / bb_range
+    
     # Vérifier tendance
     trend = detect_trend(df)
+    signal_data['trend'] = trend if trend else 'unknown'
+    
     if not trend:
         logger.info("❌ Pas de tendance claire (EMA20/50)")
-        # Afficher les valeurs EMA
-        last = df.iloc[-1]
         logger.info("   EMA20: %.2f, EMA50: %.2f, Close: %.2f", 
                    last.get('ema20',0), last.get('ema50',0), last['close'])
+        signal_data['reason_not_executed'] = 'Pas de tendance claire'
+        log_signal_to_file(signal_data)
         return None
     
     logger.info(f"✅ Tendance détectée: {trend}")
     
     # Vérifier BIOS
     bios = detect_bios(df)
+    signal_data['bios_detected'] = bios is not None
+    
     if not bios:
         logger.info("❌ Pas de Break of Structure (BIOS)")
+        signal_data['reason_not_executed'] = 'Pas de BIOS'
+        log_signal_to_file(signal_data)
         return None
     
     logger.info(f"✅ BIOS détecté: {bios['direction']} at {bios['level']:.2f}")
     
     # Vérifier zone OTE
     ote = detect_ote_zone(df, bios['direction'], bios['level'])
+    signal_data['ote_zone'] = ote is not None
+    
     if not ote:
         logger.info("❌ Pas de zone OTE calculable")
+        signal_data['reason_not_executed'] = 'Pas de zone OTE'
+        log_signal_to_file(signal_data)
         return None
     
     current_price = df['close'].iloc[-1]
@@ -427,6 +512,8 @@ def debug_check_signal(df):
     
     if not in_zone:
         logger.info("❌ Prix en dehors de la zone OTE")
+        signal_data['reason_not_executed'] = 'Prix hors zone OTE'
+        log_signal_to_file(signal_data)
         return None
     
     # Vérifier momentum
@@ -443,13 +530,24 @@ def debug_check_signal(df):
         score = sum(1 for s in required if s in signals)
     
     logger.info(f"   Score momentum: {score}/3")
+    signal_data['signal_strength'] = score
     
     if score < 2:
         logger.info("❌ Score momentum insuffisant")
+        signal_data['reason_not_executed'] = f'Momentum insuffisant ({score}/3)'
+        log_signal_to_file(signal_data)
         return None
     
-    logger.info(f"🎉 SIGNAL TROUVÉ: {trend}")
-    return trend if trend == 'bullish' else 'bearish'
+    # SIGNAL TROUVÉ !
+    result = trend if trend == 'bullish' else 'bearish'
+    logger.info(f"🎉 SIGNAL TROUVÉ: {result}")
+    
+    signal_data['signal'] = result
+    signal_data['executed'] = True
+    signal_data['reason_not_executed'] = ''
+    log_signal_to_file(signal_data)
+    
+    return result
 
 # Garder l'ancien nom pour la compatibilité
 check_signal = debug_check_signal
