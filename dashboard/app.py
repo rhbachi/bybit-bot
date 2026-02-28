@@ -326,3 +326,42 @@ if __name__ == '__main__':
     print(f"📡 Bots configurés: {len(BOTS)}")
     
     app.run(debug=debug, host='0.0.0.0', port=port)
+    @app.route('/api/recent_signals')
+@requires_auth
+def get_recent_signals():
+    limit = int(request.args.get('limit', 20))
+    signals = fetch_signals_from_bots()
+    
+    print(f"🔍 Nombre total de signaux reçus: {len(signals)}", flush=True)
+    
+    formatted_signals = []
+    bot_counts = {'ZONE2_AI': 0, 'MULTI_SYMBOL': 0, 'autres': 0}
+    
+    for s in signals[:limit]:
+        # Récupérer le nom du bot
+        bot_name = s.get('bot', '')
+        
+        # Debug : afficher le premier signal de chaque type
+        if len(formatted_signals) < 5:
+            print(f"📊 Signal brut: {s}", flush=True)
+        
+        # Compter les bots
+        if 'ZONE2_AI' in str(s):
+            bot_counts['ZONE2_AI'] += 1
+            bot_name = 'ZONE2_AI'
+        elif 'MULTI_SYMBOL' in str(s):
+            bot_counts['MULTI_SYMBOL'] += 1
+            bot_name = 'MULTI_SYMBOL'
+        
+        formatted_signals.append({
+            'timestamp': s.get('timestamp', ''),
+            'bot': bot_name or 'UNKNOWN',
+            'signal': s.get('signal', 'none'),
+            'price': s.get('price', 0),
+            'strength': s.get('strength', '0/3'),
+            'executed': s.get('executed', False),
+            'reason': s.get('reason', '')
+        })
+    
+    print(f"📊 Répartition: {bot_counts}", flush=True)
+    return jsonify(formatted_signals)
