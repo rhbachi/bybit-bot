@@ -261,8 +261,8 @@ def get_recent_signals():
     
     print(f"📊 Bots détectés: {bot_counts}", flush=True)
     return jsonify(formatted_signals)
-    
-    @app.route('/api/analyze_bots')
+
+@app.route('/api/analyze_bots')
 @requires_auth
 def analyze_bots():
     """Analyse détaillée des signaux de chaque bot"""
