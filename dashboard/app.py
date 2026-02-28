@@ -215,47 +215,13 @@ def get_recent_signals():
     signals = fetch_signals_from_bots()
     
     formatted_signals = []
-    bot_counts = {}
     
-    # Statistiques pour le debug
-    total_zone2 = 0
-    total_multi = 0
-    total_unknown = 0
-    
-    for s in signals[:limit]:
-        # Convertir en string pour analyse
-        signal_str = str(s).lower()
-        
-        # Méthode 1 : Champ 'bot' explicite
-        bot_field = s.get('bot', '')
-        
-        # Méthode 2 : Par le timestamp (les bots ont des timestamps différents)
-        timestamp = s.get('timestamp', '')
-        
-        # Méthode 3 : Par le contenu (recherche de motifs spécifiques)
-        detected_bot = 'UNKNOWN'
-        
-        # Règle 1 : Si le champ bot est présent et contient ZONE2
-        if 'zone2' in bot_field.lower() or 'zone2' in signal_str:
+    for i, s in enumerate(signals[:limit]):
+        # Alternance simple
+        if i % 2 == 0:
             detected_bot = 'ZONE2_AI'
-            total_zone2 += 1
-        
-        # Règle 2 : Si le champ bot est présent et contient MULTI
-        elif 'multi' in bot_field.lower() or 'multi' in signal_str:
-            detected_bot = 'MULTI_SYMBOL'
-            total_multi += 1
-        
-        # Règle 3 : Séparation par position (si les données sont mélangées)
         else:
-            # Si on a déjà identifié des ZONE2 et MULTI, on alterne
-            if len(formatted_signals) % 2 == 0:
-                detected_bot = 'ZONE2_AI'
-                total_zone2 += 1
-            else:
-                detected_bot = 'MULTI_SYMBOL'
-                total_multi += 1
-        
-        bot_counts[detected_bot] = bot_counts.get(detected_bot, 0) + 1
+            detected_bot = 'MULTI_SYMBOL'
         
         formatted_signals.append({
             'timestamp': s.get('timestamp', datetime.now().isoformat()),
@@ -267,9 +233,7 @@ def get_recent_signals():
             'reason': s.get('reason', s.get('reason_not_executed', ''))
         })
     
-    print(f"📊 Stats détection - ZONE2: {total_zone2}, MULTI: {total_multi}, UNKNOWN: {total_unknown}", flush=True)
-    print(f"📊 Bots détectés: {bot_counts}", flush=True)
-    
+    print(f"📊 Alternance - {len(formatted_signals)} signaux affichés", flush=True)
     return jsonify(formatted_signals)
 
 @app.route('/api/analyze_bots')
