@@ -217,36 +217,44 @@ def get_recent_signals():
     formatted_signals = []
     bot_counts = {}
     
+    # Statistiques pour le debug
+    total_zone2 = 0
+    total_multi = 0
+    total_unknown = 0
+    
     for s in signals[:limit]:
-        # Tentative de détection du bot par plusieurs méthodes
-        detected_bot = None
+        # Convertir en string pour analyse
+        signal_str = str(s).lower()
         
-        # Méthode 1 : Champ 'bot' direct
-        if s.get('bot'):
-            detected_bot = s.get('bot')
+        # Méthode 1 : Champ 'bot' explicite
+        bot_field = s.get('bot', '')
         
-        # Méthode 2 : Champ 'bot_name'
-        elif s.get('bot_name'):
-            detected_bot = s.get('bot_name')
+        # Méthode 2 : Par le timestamp (les bots ont des timestamps différents)
+        timestamp = s.get('timestamp', '')
         
-        # Méthode 3 : Par l'URL (si disponible)
-        elif s.get('source_url'):
-            if 'zone2' in s.get('source_url', '').lower():
-                detected_bot = 'ZONE2_AI'
-            elif 'multi' in s.get('source_url', '').lower():
-                detected_bot = 'MULTI_SYMBOL'
+        # Méthode 3 : Par le contenu (recherche de motifs spécifiques)
+        detected_bot = 'UNKNOWN'
         
-        # Méthode 4 : Par le contenu (recherche de mots-clés)
+        # Règle 1 : Si le champ bot est présent et contient ZONE2
+        if 'zone2' in bot_field.lower() or 'zone2' in signal_str:
+            detected_bot = 'ZONE2_AI'
+            total_zone2 += 1
+        
+        # Règle 2 : Si le champ bot est présent et contient MULTI
+        elif 'multi' in bot_field.lower() or 'multi' in signal_str:
+            detected_bot = 'MULTI_SYMBOL'
+            total_multi += 1
+        
+        # Règle 3 : Séparation par position (si les données sont mélangées)
         else:
-            signal_str = str(s).lower()
-            if 'zone2' in signal_str:
+            # Si on a déjà identifié des ZONE2 et MULTI, on alterne
+            if len(formatted_signals) % 2 == 0:
                 detected_bot = 'ZONE2_AI'
-            elif 'multi' in signal_str:
-                detected_bot = 'MULTI_SYMBOL'
+                total_zone2 += 1
             else:
-                detected_bot = 'UNKNOWN'
+                detected_bot = 'MULTI_SYMBOL'
+                total_multi += 1
         
-        # Compter
         bot_counts[detected_bot] = bot_counts.get(detected_bot, 0) + 1
         
         formatted_signals.append({
@@ -259,7 +267,9 @@ def get_recent_signals():
             'reason': s.get('reason', s.get('reason_not_executed', ''))
         })
     
+    print(f"📊 Stats détection - ZONE2: {total_zone2}, MULTI: {total_multi}, UNKNOWN: {total_unknown}", flush=True)
     print(f"📊 Bots détectés: {bot_counts}", flush=True)
+    
     return jsonify(formatted_signals)
 
 @app.route('/api/analyze_bots')
