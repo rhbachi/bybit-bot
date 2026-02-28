@@ -27,17 +27,16 @@ app.secret_key = os.getenv('DASHBOARD_SECRET_KEY', secrets.token_hex(32))
 DASHBOARD_USERNAME = os.getenv('DASHBOARD_USERNAME', 'admin')
 DASHBOARD_PASSWORD = os.getenv('DASHBOARD_PASSWORD', 'change_me_please')
 
-# URLs des bots (noms des services dans Coolify)
 # URLs des bots avec leurs NOMS de service Docker
 BOTS = [
     {
         'name': 'ZONE2_AI',
-        'url': 'http://bybit-bot-zone2:5001/api/signals',  # Nom du service
+        'url': 'http://bybit-bot-zone2:5001/api/signals',
         'timeout': 2
     },
     {
         'name': 'MULTI_SYMBOL',
-        'url': 'http://bybit-bot-multisymbol:5001/api/signals',  # Nom du service
+        'url': 'http://bybit-bot-multisymbol:5001/api/signals',
         'timeout': 3
     }
 ]
@@ -91,9 +90,6 @@ def fetch_signals_from_bots():
             if response.status_code == 200:
                 signals = response.json()
                 print(f"   ✅ {bot['name']}: {len(signals)} signaux reçus", flush=True)
-                
-                # Les signaux ont déjà le champ 'bot' depuis l'API du bot
-                # On les ajoute directement
                 all_signals.extend(signals)
             else:
                 print(f"   ⚠️ {bot['name']}: code {response.status_code}", flush=True)
@@ -106,12 +102,10 @@ def fetch_signals_from_bots():
     # Trier par date (plus récent d'abord)
     all_signals.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     
-    # Si on a reçu des signaux, on les retourne
     if all_signals:
         print(f"   ✅ Utilisation des {len(all_signals)} signaux des bots", flush=True)
         return all_signals
     
-    # Sinon, données de test
     print(f"   ⚠️ Aucun signal reçu - utilisation des données de test", flush=True)
     return generate_test_signals()
 
@@ -211,7 +205,7 @@ def get_parameters():
 @app.route('/api/recent_trades')
 @requires_auth
 def get_recent_trades():
-    """API - Trades récents (à implémenter si besoin)"""
+    """API - Trades récents"""
     return jsonify([])
 
 @app.route('/api/recent_signals')
@@ -219,23 +213,37 @@ def get_recent_trades():
 def get_recent_signals():
     """
     API - Récupère les signaux DIRECTEMENT depuis l'API des bots
+    Version avec debug pour identifier les deux bots
     """
     limit = int(request.args.get('limit', 20))
-    
-    # Récupérer les signaux depuis les bots
     signals = fetch_signals_from_bots()
     
-    print(f"   → Formatage de {len(signals)} signaux pour le dashboard", flush=True)
+    print(f"🔍 Nombre total de signaux reçus: {len(signals)}", flush=True)
     
-    # Limiter et formater
     formatted_signals = []
+    bot_counts = {'ZONE2_AI': 0, 'MULTI_SYMBOL': 0, 'autres': 0}
+    
     for s in signals[:limit]:
-        # S'assurer que le champ bot est présent
-        bot_name = s.get('bot', 'unknown')
+        # Récupérer le nom du bot
+        bot_name = s.get('bot', '')
+        
+        # Debug : afficher le premier signal de chaque type
+        if len(formatted_signals) < 5:
+            print(f"📊 Signal brut: {s}", flush=True)
+        
+        # Compter les bots
+        if 'ZONE2_AI' in str(s):
+            bot_counts['ZONE2_AI'] += 1
+            bot_name = 'ZONE2_AI'
+        elif 'MULTI_SYMBOL' in str(s):
+            bot_counts['MULTI_SYMBOL'] += 1
+            bot_name = 'MULTI_SYMBOL'
+        else:
+            bot_counts['autres'] += 1
         
         formatted_signals.append({
-            'timestamp': s.get('timestamp', datetime.now().isoformat()),
-            'bot': bot_name,
+            'timestamp': s.get('timestamp', ''),
+            'bot': bot_name or 'UNKNOWN',
             'signal': s.get('signal', 'none'),
             'price': s.get('price', 0),
             'strength': s.get('strength', '0/3'),
@@ -243,8 +251,7 @@ def get_recent_signals():
             'reason': s.get('reason', '')
         })
     
-    print(f"   → Envoi de {len(formatted_signals)} signaux formatés", flush=True)
-    
+    print(f"📊 Répartition: {bot_counts}", flush=True)
     return jsonify(formatted_signals)
 
 @app.route('/api/current_positions')
@@ -252,8 +259,6 @@ def get_recent_signals():
 def get_current_positions():
     """API - Positions actuelles"""
     try:
-        # Essayer de lire depuis l'API des bots (optionnel)
-        # Pour l'instant, retourner vide
         return jsonify({
             'positions': [],
             'total_pnl': 0,
@@ -326,42 +331,3 @@ if __name__ == '__main__':
     print(f"📡 Bots configurés: {len(BOTS)}")
     
     app.run(debug=debug, host='0.0.0.0', port=port)
-    @app.route('/api/recent_signals')
-@requires_auth
-def get_recent_signals():
-    limit = int(request.args.get('limit', 20))
-    signals = fetch_signals_from_bots()
-    
-    print(f"🔍 Nombre total de signaux reçus: {len(signals)}", flush=True)
-    
-    formatted_signals = []
-    bot_counts = {'ZONE2_AI': 0, 'MULTI_SYMBOL': 0, 'autres': 0}
-    
-    for s in signals[:limit]:
-        # Récupérer le nom du bot
-        bot_name = s.get('bot', '')
-        
-        # Debug : afficher le premier signal de chaque type
-        if len(formatted_signals) < 5:
-            print(f"📊 Signal brut: {s}", flush=True)
-        
-        # Compter les bots
-        if 'ZONE2_AI' in str(s):
-            bot_counts['ZONE2_AI'] += 1
-            bot_name = 'ZONE2_AI'
-        elif 'MULTI_SYMBOL' in str(s):
-            bot_counts['MULTI_SYMBOL'] += 1
-            bot_name = 'MULTI_SYMBOL'
-        
-        formatted_signals.append({
-            'timestamp': s.get('timestamp', ''),
-            'bot': bot_name or 'UNKNOWN',
-            'signal': s.get('signal', 'none'),
-            'price': s.get('price', 0),
-            'strength': s.get('strength', '0/3'),
-            'executed': s.get('executed', False),
-            'reason': s.get('reason', '')
-        })
-    
-    print(f"📊 Répartition: {bot_counts}", flush=True)
-    return jsonify(formatted_signals)
