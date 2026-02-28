@@ -214,43 +214,95 @@ def get_recent_signals():
     limit = int(request.args.get('limit', 20))
     signals = fetch_signals_from_bots()
     
-    print(f"🔍 Nombre total de signaux reçus: {len(signals)}", flush=True)
-    
     formatted_signals = []
-    bot_counts = {'ZONE2_AI': 0, 'MULTI_SYMBOL': 0, 'autres': 0}
+    bot_counts = {}
     
     for s in signals[:limit]:
-        # Convertir en string pour faciliter la recherche
-        signal_str = str(s).lower()
+        # Tentative de détection du bot par plusieurs méthodes
+        detected_bot = None
         
-        # Déterminer le bot
-        if 'zone2' in signal_str or s.get('bot') == 'ZONE2_AI':
-            bot_name = 'ZONE2_AI'
-            bot_counts['ZONE2_AI'] += 1
-        elif 'multi' in signal_str or 'MULTI_SYMBOL' in signal_str:
-            bot_name = 'MULTI_SYMBOL'
-            bot_counts['MULTI_SYMBOL'] += 1
+        # Méthode 1 : Champ 'bot' direct
+        if s.get('bot'):
+            detected_bot = s.get('bot')
+        
+        # Méthode 2 : Champ 'bot_name'
+        elif s.get('bot_name'):
+            detected_bot = s.get('bot_name')
+        
+        # Méthode 3 : Par l'URL (si disponible)
+        elif s.get('source_url'):
+            if 'zone2' in s.get('source_url', '').lower():
+                detected_bot = 'ZONE2_AI'
+            elif 'multi' in s.get('source_url', '').lower():
+                detected_bot = 'MULTI_SYMBOL'
+        
+        # Méthode 4 : Par le contenu (recherche de mots-clés)
         else:
-            bot_name = s.get('bot', 'UNKNOWN')
-            bot_counts['autres'] += 1
+            signal_str = str(s).lower()
+            if 'zone2' in signal_str:
+                detected_bot = 'ZONE2_AI'
+            elif 'multi' in signal_str:
+                detected_bot = 'MULTI_SYMBOL'
+            else:
+                detected_bot = 'UNKNOWN'
         
-        # Debug : afficher le premier signal de chaque bot
-        if len([x for x in formatted_signals if x['bot'] == bot_name]) < 2:
-            print(f"📊 Signal {bot_name}: {s}", flush=True)
+        # Compter
+        bot_counts[detected_bot] = bot_counts.get(detected_bot, 0) + 1
         
         formatted_signals.append({
-            'timestamp': s.get('timestamp', ''),
-            'bot': bot_name,
+            'timestamp': s.get('timestamp', datetime.now().isoformat()),
+            'bot': detected_bot,
             'signal': s.get('signal', 'none'),
             'price': s.get('price', 0),
             'strength': s.get('strength', '0/3'),
             'executed': s.get('executed', False),
-            'reason': s.get('reason', '')
+            'reason': s.get('reason', s.get('reason_not_executed', ''))
         })
     
-    print(f"📊 Répartition: {bot_counts}", flush=True)
+    print(f"📊 Bots détectés: {bot_counts}", flush=True)
     return jsonify(formatted_signals)
     
+    @app.route('/api/analyze_bots')
+@requires_auth
+def analyze_bots():
+    """Analyse détaillée des signaux de chaque bot"""
+    results = {}
+    
+    for bot in BOTS:
+        try:
+            response = requests.get(bot['url'], timeout=3)
+            if response.status_code == 200:
+                signals = response.json()
+                
+                # Analyser les champs des signaux
+                bot_results = {
+                    'total_signals': len(signals),
+                    'bots_detected': {},
+                    'sample_signals': signals[:3],
+                    'field_analysis': {}
+                }
+                
+                # Vérifier comment le bot est identifié dans chaque signal
+                for i, s in enumerate(signals[:20]):
+                    # Chercher le champ 'bot' ou équivalent
+                    bot_field = s.get('bot', 'ABSENT')
+                    bot_results['bots_detected'][bot_field] = bot_results['bots_detected'].get(bot_field, 0) + 1
+                    
+                    # Analyser tous les champs du premier signal
+                    if i == 0:
+                        bot_results['field_analysis'] = {
+                            'fields_present': list(s.keys()),
+                            'values_sample': {k: str(v)[:50] for k, v in s.items()}
+                        }
+                
+                results[bot['name']] = bot_results
+            else:
+                results[bot['name']] = {'error': f'HTTP {response.status_code}'}
+        except Exception as e:
+            results[bot['name']] = {'error': str(e)}
+    
+    return jsonify(results)
+
 @app.route('/api/current_positions')
 @requires_auth
 def get_current_positions():
