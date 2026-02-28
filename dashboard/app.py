@@ -211,10 +211,6 @@ def get_recent_trades():
 @app.route('/api/recent_signals')
 @requires_auth
 def get_recent_signals():
-    """
-    API - Récupère les signaux DIRECTEMENT depuis l'API des bots
-    Version avec debug pour identifier les deux bots
-    """
     limit = int(request.args.get('limit', 20))
     signals = fetch_signals_from_bots()
     
@@ -224,26 +220,27 @@ def get_recent_signals():
     bot_counts = {'ZONE2_AI': 0, 'MULTI_SYMBOL': 0, 'autres': 0}
     
     for s in signals[:limit]:
-        # Récupérer le nom du bot
-        bot_name = s.get('bot', '')
+        # Convertir en string pour faciliter la recherche
+        signal_str = str(s).lower()
         
-        # Debug : afficher le premier signal de chaque type
-        if len(formatted_signals) < 5:
-            print(f"📊 Signal brut: {s}", flush=True)
-        
-        # Compter les bots
-        if 'ZONE2_AI' in str(s):
-            bot_counts['ZONE2_AI'] += 1
+        # Déterminer le bot
+        if 'zone2' in signal_str or s.get('bot') == 'ZONE2_AI':
             bot_name = 'ZONE2_AI'
-        elif 'MULTI_SYMBOL' in str(s):
-            bot_counts['MULTI_SYMBOL'] += 1
+            bot_counts['ZONE2_AI'] += 1
+        elif 'multi' in signal_str or 'MULTI_SYMBOL' in signal_str:
             bot_name = 'MULTI_SYMBOL'
+            bot_counts['MULTI_SYMBOL'] += 1
         else:
+            bot_name = s.get('bot', 'UNKNOWN')
             bot_counts['autres'] += 1
+        
+        # Debug : afficher le premier signal de chaque bot
+        if len([x for x in formatted_signals if x['bot'] == bot_name]) < 2:
+            print(f"📊 Signal {bot_name}: {s}", flush=True)
         
         formatted_signals.append({
             'timestamp': s.get('timestamp', ''),
-            'bot': bot_name or 'UNKNOWN',
+            'bot': bot_name,
             'signal': s.get('signal', 'none'),
             'price': s.get('price', 0),
             'strength': s.get('strength', '0/3'),
@@ -253,7 +250,7 @@ def get_recent_signals():
     
     print(f"📊 Répartition: {bot_counts}", flush=True)
     return jsonify(formatted_signals)
-
+    
 @app.route('/api/current_positions')
 @requires_auth
 def get_current_positions():
