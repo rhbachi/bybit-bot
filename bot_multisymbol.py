@@ -1,13 +1,37 @@
 import os
 import time
+import threading
 import pandas as pd
 from datetime import datetime, timezone
+from flask import Flask, jsonify
 
 from config import exchange, SYMBOLS
 from strategy import apply_indicators, check_signal
 from risk import calculate_position_size
 from notifier import send_telegram
 from logger import init_logger, log_trade
+
+
+# =========================
+# FLASK API
+# =========================
+app = Flask(__name__)
+signals_memory = []
+
+
+@app.route("/api/signals")
+def api_signals():
+    return jsonify(signals_memory[-50:])
+
+
+@app.route("/api/health")
+def api_health():
+    return jsonify({"status": "ok"})
+
+
+def run_api():
+    print("🌐 API server started on port 5001", flush=True)
+    app.run(host="0.0.0.0", port=5001)
 
 
 # =========================
@@ -29,11 +53,8 @@ MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", 3))
 SL_ATR_MULTIPLIER = float(os.getenv("SL_ATR_MULTIPLIER", 1.5))
 TP_ATR_MULTIPLIER = float(os.getenv("TP_ATR_MULTIPLIER", 3.0))
 
-TRAILING_STOP_ACTIVATION = float(os.getenv("TRAILING_STOP_ACTIVATION", 0.01))
-TRAILING_STOP_DISTANCE = float(os.getenv("TRAILING_STOP_DISTANCE", 0.005))
 
 # =========================
-
 state = {}
 current_day = datetime.now(timezone.utc).date()
 daily_loss = 0.0
@@ -80,6 +101,7 @@ def get_open_positions():
     ]
 
 
+# =========================
 def run():
     global daily_loss, consecutive_losses
 
@@ -134,9 +156,11 @@ def run():
                     if signal == "long":
                         stop_loss = price - stop_distance
                         take_profit = price + tp_distance
+                        side = "LONG"
                     else:
                         stop_loss = price + stop_distance
                         take_profit = price - tp_distance
+                        side = "SHORT"
 
                     qty = calculate_position_size(
                         CAPITAL,
@@ -169,8 +193,18 @@ def run():
                     s["in_position"] = True
                     s["last_trade_time"] = time.time()
 
+                    # 🔥 Ajouter au dashboard
+                    signals_memory.append({
+                        "symbol": symbol,
+                        "side": side,
+                        "entry": price,
+                        "sl": stop_loss,
+                        "tp": take_profit,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+
                     print(
-                        f"📈 TRADE | {symbol} | {signal.upper()} | "
+                        f"📈 TRADE | {symbol} | {side} | "
                         f"SL={stop_loss} | TP={take_profit} | Qty={qty}",
                         flush=True,
                     )
@@ -188,6 +222,13 @@ def run():
                     else:
                         consecutive_losses = 0
 
+                    signals_memory.append({
+                        "symbol": symbol,
+                        "side": "CLOSE",
+                        "pnl": pnl,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+
                     log_trade(symbol, "CLOSED", 0, 0, 0, pnl, "CLOSED")
                     s["in_position"] = False
 
@@ -200,4 +241,10 @@ def run():
             time.sleep(60)
 
 
+# =========================
+# START API THREAD
+# =========================
+threading.Thread(target=run_api, daemon=True).start()
+
+# =========================
 run()
