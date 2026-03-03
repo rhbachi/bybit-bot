@@ -20,6 +20,7 @@ from logger import init_logger, log_trade
 # PARAMÈTRES
 # =========================
 STOP_LOSS_PCT = 0.006
+RR_MULTIPLIER = 2.3
 MAX_TRADES_PER_DAY = 10
 COOLDOWN_SECONDS = 600
 
@@ -30,9 +31,6 @@ state = {}
 current_day = datetime.now(timezone.utc).date()
 
 
-# =========================
-# UTILS
-# =========================
 def safe_float(v, default=0.0):
     try:
         return float(v) if v is not None else default
@@ -70,7 +68,7 @@ def get_min_notional(symbol):
     try:
         market = exchange.market(symbol)
         min_notional = market.get("limits", {}).get("cost", {}).get("min")
-        if min_notional is None or min_notional <= 0:
+        if not min_notional:
             return 5.0
         return float(min_notional)
     except:
@@ -96,9 +94,6 @@ def adjust_qty_to_min_notional(symbol, qty, price):
     return round(min_qty, 6)
 
 
-# =========================
-# MAIN
-# =========================
 def run():
     print("🤖 MultiSymbol Bot démarré", flush=True)
     send_telegram("🤖 MultiSymbol Bot démarré")
@@ -128,7 +123,6 @@ def run():
                 df = apply_indicators(df)
 
                 signal = check_signal(df)
-
                 print(f"🚦 Signal {symbol} = {signal}", flush=True)
 
                 if signal and not s["in_position"]:
@@ -147,75 +141,52 @@ def run():
                     if qty <= 0:
                         continue
 
-                    # ======================
-# CALCUL SL / TP
-# ======================
+                    # ===== CALCUL SL / TP =====
+                    if signal == "long":
+                        stop_loss = price * (1 - STOP_LOSS_PCT)
+                        sl_distance = price - stop_loss
+                        take_profit = price + sl_distance * RR_MULTIPLIER
+                    else:
+                        stop_loss = price * (1 + STOP_LOSS_PCT)
+                        sl_distance = stop_loss - price
+                        take_profit = price - sl_distance * RR_MULTIPLIER
 
-RR_MULTIPLIER = 2.3
+                    market = exchange.market(symbol)
+                    precision = market["precision"]["price"]
 
-if signal == "long":
-    stop_loss = price * (1 - STOP_LOSS_PCT)
-    sl_distance = price - stop_loss
-    take_profit = price + sl_distance * RR_MULTIPLIER
-else:
-    stop_loss = price * (1 + STOP_LOSS_PCT)
-    sl_distance = stop_loss - price
-    take_profit = price - sl_distance * RR_MULTIPLIER
+                    stop_loss = round(stop_loss, precision)
+                    take_profit = round(take_profit, precision)
 
-# ===== Ajustement précision marché =====
-market = exchange.market(symbol)
-price_precision = market["precision"]["price"]
-
-stop_loss = round(stop_loss, price_precision)
-take_profit = round(take_profit, price_precision)
-
-# ======================
-# EXECUTION AVEC SL / TP
-# ======================
-
-exchange.create_market_order(
-    symbol,
-    "buy" if signal == "long" else "sell",
-    qty,
-    params={
-        "stopLoss": stop_loss,
-        "takeProfit": take_profit,
-        "slTriggerBy": "LastPrice",
-        "tpTriggerBy": "LastPrice",
-    },
-)
-
-s["in_position"] = True
-s["trades_today"] += 1
-s["last_trade_time"] = time.time()
-
-print(
-    f"📈 TRADE OUVERT | {symbol} | {signal.upper()} | "
-    f"Entry={round(price,2)} | SL={stop_loss} | TP={take_profit} | Qty={qty}",
-    flush=True,
-)
-
-send_telegram(
-    f"📈 TRADE OUVERT\n"
-    f"Pair: {symbol}\n"
-    f"Direction: {signal.upper()}\n"
-    f"Entry: {round(price,2)}\n"
-    f"SL: {stop_loss}\n"
-    f"TP: {take_profit}\n"
-    f"Qty: {qty}"
-)
+                    exchange.create_market_order(
+                        symbol,
+                        "buy" if signal == "long" else "sell",
+                        qty,
+                        params={
+                            "stopLoss": stop_loss,
+                            "takeProfit": take_profit,
+                            "slTriggerBy": "LastPrice",
+                            "tpTriggerBy": "LastPrice",
+                        },
+                    )
 
                     s["in_position"] = True
                     s["trades_today"] += 1
                     s["last_trade_time"] = time.time()
 
                     print(
-                        f"📈 TRADE OUVERT | {symbol} | {signal.upper()} | Qty={qty}",
+                        f"📈 TRADE OUVERT | {symbol} | {signal.upper()} | "
+                        f"Entry={round(price,2)} | SL={stop_loss} | TP={take_profit} | Qty={qty}",
                         flush=True,
                     )
 
                     send_telegram(
-                        f"📈 TRADE OUVERT\nPair: {symbol}\nDirection: {signal.upper()}\nQty: {qty}"
+                        f"📈 TRADE OUVERT\n"
+                        f"Pair: {symbol}\n"
+                        f"Direction: {signal.upper()}\n"
+                        f"Entry: {round(price,2)}\n"
+                        f"SL: {stop_loss}\n"
+                        f"TP: {take_profit}\n"
+                        f"Qty: {qty}"
                     )
 
                 # ===== Vérifier clôture =====
