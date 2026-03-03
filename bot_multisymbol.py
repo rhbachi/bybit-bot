@@ -17,10 +17,19 @@ from notifier import send_telegram
 from logger import init_logger, log_trade
 
 
+# =========================
+# STRATEGY PARAMETERS
+# =========================
 STOP_LOSS_PCT = 0.006
 RR_MULTIPLIER = 2.3
 MAX_TRADES_PER_DAY = 10
 COOLDOWN_SECONDS = 600
+
+# ===== PORTFOLIO PROTECTION =====
+MAX_OPEN_POSITIONS = 2
+MAX_PORTFOLIO_RISK = 0.06          # 6% total risk max
+MAX_TOTAL_EXPOSURE_MULT = 1.2      # 120% capital exposure max
+
 
 state = {}
 current_day = datetime.now(timezone.utc).date()
@@ -59,9 +68,34 @@ def fetch_data(symbol):
     )
 
 
+# ===== PORTFOLIO HELPERS =====
+
+def get_open_positions():
+    positions = exchange.fetch_positions()
+    return [
+        p for p in positions
+        if safe_float(p.get("contracts")) > 0
+    ]
+
+
+def get_portfolio_risk():
+    positions = get_open_positions()
+    return len(positions) * RISK_PER_TRADE
+
+
+def get_total_exposure():
+    positions = get_open_positions()
+    exposure = 0.0
+    for p in positions:
+        entry = safe_float(p.get("entryPrice"))
+        contracts = safe_float(p.get("contracts"))
+        exposure += entry * contracts
+    return exposure
+
+
 def run():
-    print("🤖 MultiSymbol Bot démarré", flush=True)
-    send_telegram("🤖 MultiSymbol Bot démarré")
+    print("🤖 MultiSymbol Bot démarré (Portfolio Safe V1)", flush=True)
+    send_telegram("🤖 MultiSymbol Bot démarré (Portfolio Safe V1)")
     init_logger()
 
     for symbol in SYMBOLS:
@@ -92,6 +126,17 @@ def run():
 
                 if signal and not s["in_position"]:
 
+                    # ===== PORTFOLIO PROTECTION =====
+                    open_positions = get_open_positions()
+
+                    if len(open_positions) >= MAX_OPEN_POSITIONS:
+                        print("🔒 Max positions atteintes", flush=True)
+                        continue
+
+                    if get_portfolio_risk() + RISK_PER_TRADE > MAX_PORTFOLIO_RISK:
+                        print("🔒 Risque portefeuille max atteint", flush=True)
+                        continue
+
                     price = df.iloc[-1].close
 
                     qty = calculate_position_size(
@@ -115,10 +160,15 @@ def run():
                         sl_distance = stop_loss - price
                         take_profit = price - sl_distance * RR_MULTIPLIER
 
-                    # ===== SAFE PRECISION =====
                     stop_loss = float(exchange.price_to_precision(symbol, stop_loss))
                     take_profit = float(exchange.price_to_precision(symbol, take_profit))
                     qty = float(exchange.amount_to_precision(symbol, qty))
+
+                    # ===== Exposure Check =====
+                    new_exposure = get_total_exposure() + (price * qty)
+                    if new_exposure > CAPITAL * MAX_TOTAL_EXPOSURE_MULT:
+                        print("🔒 Exposition totale trop élevée", flush=True)
+                        continue
 
                     exchange.create_market_order(
                         symbol,
