@@ -1,16 +1,9 @@
+import os
 import time
 import pandas as pd
 from datetime import datetime, timezone
 
-from config import (
-    exchange,
-    SYMBOLS,
-    TIMEFRAME,
-    CAPITAL,
-    RISK_PER_TRADE,
-    LEVERAGE,
-)
-
+from config import exchange, SYMBOLS
 from strategy import apply_indicators, check_signal
 from risk import calculate_position_size
 from notifier import send_telegram
@@ -18,21 +11,33 @@ from logger import init_logger, log_trade
 
 
 # =========================
-# STRATEGY PARAMETERS
+# ENV PARAMETERS
 # =========================
-STOP_LOSS_PCT = 0.006
-RR_MULTIPLIER = 2.3
-MAX_TRADES_PER_DAY = 10
-COOLDOWN_SECONDS = 600
+CAPITAL = float(os.getenv("CAPITAL", 50))
+LEVERAGE = int(os.getenv("LEVERAGE", 3))
+TIMEFRAME = os.getenv("TIMEFRAME", "15m")
 
-# ===== PORTFOLIO PROTECTION =====
-MAX_OPEN_POSITIONS = 2
-MAX_PORTFOLIO_RISK = 0.06          # 6% total risk max
-MAX_TOTAL_EXPOSURE_MULT = 1.2      # 120% capital exposure max
+PAPER_TRADING = os.getenv("PAPER_TRADING", "false").lower() == "true"
 
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", 2))
+RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", 0.02))
+COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", 300))
+
+MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", 10)) / 100
+MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", 3))
+
+SL_ATR_MULTIPLIER = float(os.getenv("SL_ATR_MULTIPLIER", 1.5))
+TP_ATR_MULTIPLIER = float(os.getenv("TP_ATR_MULTIPLIER", 3.0))
+
+TRAILING_STOP_ACTIVATION = float(os.getenv("TRAILING_STOP_ACTIVATION", 0.01))
+TRAILING_STOP_DISTANCE = float(os.getenv("TRAILING_STOP_DISTANCE", 0.005))
+
+# =========================
 
 state = {}
 current_day = datetime.now(timezone.utc).date()
+daily_loss = 0.0
+consecutive_losses = 0
 
 
 def safe_float(v, default=0.0):
@@ -45,30 +50,27 @@ def safe_float(v, default=0.0):
 def init_symbol_state(symbol):
     state[symbol] = {
         "in_position": False,
-        "trades_today": 0,
         "last_trade_time": None,
     }
 
 
 def reset_daily():
-    global current_day
+    global current_day, daily_loss, consecutive_losses
     today = datetime.now(timezone.utc).date()
     if today != current_day:
         current_day = today
-        for s in state.values():
-            s["trades_today"] = 0
+        daily_loss = 0.0
+        consecutive_losses = 0
         print("🔄 Nouveau jour", flush=True)
 
 
 def fetch_data(symbol):
-    ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=120)
+    ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=200)
     return pd.DataFrame(
         ohlcv,
         columns=["time", "open", "high", "low", "close", "volume"],
     )
 
-
-# ===== PORTFOLIO HELPERS =====
 
 def get_open_positions():
     positions = exchange.fetch_positions()
@@ -78,24 +80,11 @@ def get_open_positions():
     ]
 
 
-def get_portfolio_risk():
-    positions = get_open_positions()
-    return len(positions) * RISK_PER_TRADE
-
-
-def get_total_exposure():
-    positions = get_open_positions()
-    exposure = 0.0
-    for p in positions:
-        entry = safe_float(p.get("entryPrice"))
-        contracts = safe_float(p.get("contracts"))
-        exposure += entry * contracts
-    return exposure
-
-
 def run():
-    print("🤖 MultiSymbol Bot démarré (Portfolio Safe V1)", flush=True)
-    send_telegram("🤖 MultiSymbol Bot démarré (Portfolio Safe V1)")
+    global daily_loss, consecutive_losses
+
+    print("🤖 MultiSymbol Bot PRO démarré", flush=True)
+    send_telegram("🤖 MultiSymbol Bot PRO démarré")
     init_logger()
 
     for symbol in SYMBOLS:
@@ -105,44 +94,54 @@ def run():
         try:
             reset_daily()
 
+            if daily_loss >= CAPITAL * MAX_DAILY_LOSS_PCT:
+                print("🛑 Daily loss limit reached", flush=True)
+                time.sleep(600)
+                continue
+
+            if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
+                print("🛑 Max consecutive losses reached", flush=True)
+                time.sleep(600)
+                continue
+
             for symbol in SYMBOLS:
 
                 s = state[symbol]
 
-                print(f"\n⏳ Analyse {symbol}", flush=True)
-                print(f"📊 in_position={s['in_position']}", flush=True)
-
-                if s["trades_today"] >= MAX_TRADES_PER_DAY:
+                if s["last_trade_time"] and time.time() - s["last_trade_time"] < COOLDOWN_SECONDS:
                     continue
 
-                if s["last_trade_time"] and time.time() - s["last_trade_time"] < COOLDOWN_SECONDS:
+                open_positions = get_open_positions()
+                if len(open_positions) >= MAX_POSITIONS:
                     continue
 
                 df = fetch_data(symbol)
                 df = apply_indicators(df)
 
                 signal = check_signal(df)
-                print(f"🚦 Signal {symbol} = {signal}", flush=True)
+
+                print(f"⏳ Analyse {symbol} | Signal={signal}", flush=True)
 
                 if signal and not s["in_position"]:
 
-                    # ===== PORTFOLIO PROTECTION =====
-                    open_positions = get_open_positions()
-
-                    if len(open_positions) >= MAX_OPEN_POSITIONS:
-                        print("🔒 Max positions atteintes", flush=True)
-                        continue
-
-                    if get_portfolio_risk() + RISK_PER_TRADE > MAX_PORTFOLIO_RISK:
-                        print("🔒 Risque portefeuille max atteint", flush=True)
-                        continue
-
                     price = df.iloc[-1].close
+                    atr = df["high"].rolling(14).max() - df["low"].rolling(14).min()
+                    atr_value = atr.iloc[-1]
+
+                    stop_distance = atr_value * SL_ATR_MULTIPLIER
+                    tp_distance = atr_value * TP_ATR_MULTIPLIER
+
+                    if signal == "long":
+                        stop_loss = price - stop_distance
+                        take_profit = price + tp_distance
+                    else:
+                        stop_loss = price + stop_distance
+                        take_profit = price - tp_distance
 
                     qty = calculate_position_size(
                         CAPITAL,
                         RISK_PER_TRADE,
-                        STOP_LOSS_PCT,
+                        stop_distance / price,
                         price,
                         LEVERAGE,
                     )
@@ -150,55 +149,30 @@ def run():
                     if qty <= 0:
                         continue
 
-                    # ===== SL / TP =====
-                    if signal == "long":
-                        stop_loss = price * (1 - STOP_LOSS_PCT)
-                        sl_distance = price - stop_loss
-                        take_profit = price + sl_distance * RR_MULTIPLIER
-                    else:
-                        stop_loss = price * (1 + STOP_LOSS_PCT)
-                        sl_distance = stop_loss - price
-                        take_profit = price - sl_distance * RR_MULTIPLIER
-
                     stop_loss = float(exchange.price_to_precision(symbol, stop_loss))
                     take_profit = float(exchange.price_to_precision(symbol, take_profit))
                     qty = float(exchange.amount_to_precision(symbol, qty))
 
-                    # ===== Exposure Check =====
-                    new_exposure = get_total_exposure() + (price * qty)
-                    if new_exposure > CAPITAL * MAX_TOTAL_EXPOSURE_MULT:
-                        print("🔒 Exposition totale trop élevée", flush=True)
-                        continue
-
-                    exchange.create_market_order(
-                        symbol,
-                        "buy" if signal == "long" else "sell",
-                        qty,
-                        params={
-                            "stopLoss": stop_loss,
-                            "takeProfit": take_profit,
-                            "slTriggerBy": "LastPrice",
-                            "tpTriggerBy": "LastPrice",
-                        },
-                    )
+                    if not PAPER_TRADING:
+                        exchange.create_market_order(
+                            symbol,
+                            "buy" if signal == "long" else "sell",
+                            qty,
+                            params={
+                                "stopLoss": stop_loss,
+                                "takeProfit": take_profit,
+                                "slTriggerBy": "LastPrice",
+                                "tpTriggerBy": "LastPrice",
+                            },
+                        )
 
                     s["in_position"] = True
-                    s["trades_today"] += 1
                     s["last_trade_time"] = time.time()
 
                     print(
-                        f"📈 TRADE OUVERT | {symbol} | {signal.upper()} | "
+                        f"📈 TRADE | {symbol} | {signal.upper()} | "
                         f"SL={stop_loss} | TP={take_profit} | Qty={qty}",
                         flush=True,
-                    )
-
-                    send_telegram(
-                        f"📈 TRADE OUVERT\n"
-                        f"Pair: {symbol}\n"
-                        f"Direction: {signal.upper()}\n"
-                        f"SL: {stop_loss}\n"
-                        f"TP: {take_profit}\n"
-                        f"Qty: {qty}"
                     )
 
                 # ===== CHECK CLOSE =====
@@ -207,26 +181,22 @@ def run():
 
                 if s["in_position"] and pos and safe_float(pos.get("contracts")) == 0:
                     pnl = safe_float(pos.get("realizedPnl"))
-                    result = "WIN" if pnl > 0 else "LOSS"
 
-                    log_trade(symbol, result, 0, 0, 0, pnl, result)
+                    if pnl < 0:
+                        daily_loss += abs(pnl)
+                        consecutive_losses += 1
+                    else:
+                        consecutive_losses = 0
 
-                    print(
-                        f"📊 TRADE FERMÉ | {symbol} | {result} | PnL={round(pnl,2)}",
-                        flush=True,
-                    )
-
-                    send_telegram(
-                        f"📊 TRADE FERMÉ\nPair: {symbol}\nRésultat: {result}\nPnL: {round(pnl,2)}"
-                    )
-
+                    log_trade(symbol, "CLOSED", 0, 0, 0, pnl, "CLOSED")
                     s["in_position"] = False
 
-            time.sleep(300)
+                    print(f"📊 CLOSE {symbol} | PnL={pnl}", flush=True)
+
+            time.sleep(60)
 
         except Exception as e:
-            print("❌ Erreur MultiSymbol:", e, flush=True)
-            send_telegram(f"❌ Erreur MultiSymbol: {e}")
+            print("❌ Bot Error:", e, flush=True)
             time.sleep(60)
 
 
