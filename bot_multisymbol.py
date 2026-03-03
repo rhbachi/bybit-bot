@@ -147,11 +147,63 @@ def run():
                     if qty <= 0:
                         continue
 
-                    exchange.create_market_order(
-                        symbol,
-                        "buy" if signal == "long" else "sell",
-                        qty,
-                    )
+                    # ======================
+# CALCUL SL / TP
+# ======================
+
+RR_MULTIPLIER = 2.3
+
+if signal == "long":
+    stop_loss = price * (1 - STOP_LOSS_PCT)
+    sl_distance = price - stop_loss
+    take_profit = price + sl_distance * RR_MULTIPLIER
+else:
+    stop_loss = price * (1 + STOP_LOSS_PCT)
+    sl_distance = stop_loss - price
+    take_profit = price - sl_distance * RR_MULTIPLIER
+
+# ===== Ajustement précision marché =====
+market = exchange.market(symbol)
+price_precision = market["precision"]["price"]
+
+stop_loss = round(stop_loss, price_precision)
+take_profit = round(take_profit, price_precision)
+
+# ======================
+# EXECUTION AVEC SL / TP
+# ======================
+
+exchange.create_market_order(
+    symbol,
+    "buy" if signal == "long" else "sell",
+    qty,
+    params={
+        "stopLoss": stop_loss,
+        "takeProfit": take_profit,
+        "slTriggerBy": "LastPrice",
+        "tpTriggerBy": "LastPrice",
+    },
+)
+
+s["in_position"] = True
+s["trades_today"] += 1
+s["last_trade_time"] = time.time()
+
+print(
+    f"📈 TRADE OUVERT | {symbol} | {signal.upper()} | "
+    f"Entry={round(price,2)} | SL={stop_loss} | TP={take_profit} | Qty={qty}",
+    flush=True,
+)
+
+send_telegram(
+    f"📈 TRADE OUVERT\n"
+    f"Pair: {symbol}\n"
+    f"Direction: {signal.upper()}\n"
+    f"Entry: {round(price,2)}\n"
+    f"SL: {stop_loss}\n"
+    f"TP: {take_profit}\n"
+    f"Qty: {qty}"
+)
 
                     s["in_position"] = True
                     s["trades_today"] += 1
