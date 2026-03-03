@@ -14,19 +14,30 @@ TIMEFRAME = os.getenv("TIMEFRAME", "5m")
 # ---- SINGLE SYMBOL ----
 SYMBOL = os.getenv("SYMBOL", "ETH/USDT:USDT")
 
-# ---- MULTI SYMBOL (CSV via ENV) ----
+# ---- MULTI SYMBOL SUPPORT ----
+
+# Option 1: SYMBOLS="BTC/USDT:USDT,ETH/USDT:USDT"
 symbols_env = os.getenv("SYMBOLS", "")
+
+SYMBOLS = []
+
 if symbols_env:
-    SYMBOLS = [s.strip() for s in symbols_env.split(",")]
+    SYMBOLS = [s.strip() for s in symbols_env.split(",") if s.strip()]
 else:
-    # fallback automatique
+    # Option 2: SYMBOLS_0, SYMBOLS_1, SYMBOLS_2 ...
+    i = 0
+    while True:
+        key = f"SYMBOLS_{i}"
+        value = os.getenv(key)
+        if not value:
+            break
+        SYMBOLS.append(value.strip())
+        i += 1
+
+# Fallback
+if not SYMBOLS:
     SYMBOLS = [SYMBOL]
 
-CAPITAL = float(os.getenv("CAPITAL", "30"))
-RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.05"))
-LEVERAGE = int(os.getenv("LEVERAGE", "2"))
-
-print("🔑 ENV loaded", flush=True)
 print(f"📌 SYMBOLS ACTIVE: {SYMBOLS}", flush=True)
 
 # =========================
