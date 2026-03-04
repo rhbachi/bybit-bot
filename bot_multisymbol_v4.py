@@ -3,8 +3,6 @@ import threading
 import pandas as pd
 
 from flask import Flask, jsonify
-
-from config import *
 from notifier import send_telegram
 from strategy import apply_indicators, check_signal
 from portfolio import add_position, remove_position, get_positions, lowest_score
