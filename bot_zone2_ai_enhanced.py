@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 import threading
 from flask import Flask, jsonify
 import os
+from strategy_fvg_confluence import validate_fvg_confluence
+from database import init_db, insert_trade, get_recent_trades
 
 # =========================
 # API POUR LE DASHBOARD (LANCÉE EN PREMIER)
@@ -161,6 +163,23 @@ def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
         enhanced_logger.log_error("Erreur SL/TP", e)
         return False
 
+@api_app.route('/api/status')
+def get_status():
+    """Retourne l'état du bot"""
+    try:
+        from config import exchange, SYMBOL, CAPITAL, LEVERAGE, PAPER_TRADING
+        balance = exchange.fetch_balance()
+        return jsonify({
+            'bot': 'MULTI_SYMBOL',  # ou ZONE2_AI
+            'paper_mode': PAPER_TRADING,
+            'balance_usdt': balance['USDT']['free'],
+            'leverage': LEVERAGE,
+            'symbols': SYMBOLS if hasattr(self, 'SYMBOLS') else [SYMBOL],
+            'positions_open': len(positions) if 'positions' in locals() else 0
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 def update_trailing_stop(symbol, side, qty, current_price, current_sl):
     """Met à jour le trailing stop"""
     global current_trade
@@ -243,7 +262,12 @@ def check_circuit_breaker():
 def check_signal_with_logging(df):
     """Wrapper pour logger tous les signaux"""
     from strategy_ai_enhanced import debug_check_signal, detect_trend, get_state, calculate_signal_strength
-    
+    # === FVG Institutional Confluence Filter ===
+if signal:
+    fvg_ok = validate_fvg_confluence(df_with_indicators, signal)
+    if not fvg_ok:
+        print("❌ Signal AI rejeté - pas de confluence FVG", flush=True)
+        signal = None
     df_with_indicators = apply_indicators(df)
     signal = debug_check_signal(df_with_indicators)
     

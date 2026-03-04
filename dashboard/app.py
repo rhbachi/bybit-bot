@@ -236,6 +236,26 @@ def get_recent_signals():
     print(f"📊 Alternance - {len(formatted_signals)} signaux affichés", flush=True)
     return jsonify(formatted_signals)
 
+    @app.route('/api/check_balance')
+@requires_auth
+def check_balance():
+    """Vérifie le solde et la configuration des bots"""
+    results = {}
+    
+    for bot in BOTS:
+        try:
+            # Appeler l'API du bot pour obtenir des infos
+            response = requests.get(bot['url'].replace('/signals', '/health'), timeout=3)
+            if response.status_code == 200:
+                # Ici on pourrait ajouter une route /status dans chaque bot
+                results[bot['name']] = {'status': '✅ OK'}
+            else:
+                results[bot['name']] = {'status': f'⚠️ {response.status_code}'}
+        except Exception as e:
+            results[bot['name']] = {'status': f'❌ {str(e)}'}
+    
+    return jsonify(results)
+
 @app.route('/api/analyze_bots')
 @requires_auth
 def analyze_bots():
