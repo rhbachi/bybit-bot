@@ -140,6 +140,12 @@ def run():
                 df = fetch_data(symbol)
                 df = apply_indicators(df)
 
+                signal, score = check_signal(df)
+
+                if score < SCORE_THRESHOLD:
+                print(f"⚠️ Signal rejeté | Score={score}")
+                   continue
+
                 signal = check_signal(df)
 
                 print(f"⏳ Analyse {symbol} | Signal={signal}", flush=True)
