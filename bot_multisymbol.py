@@ -142,9 +142,11 @@ def run():
 
                 signal, score = check_signal(df)
 
+                print(f"🚦 Signal {symbol} = {signal} | Score={score}")
+
                 if score < SCORE_THRESHOLD:
-                print(f"⚠️ Signal rejeté | Score={score}")
-                   continue
+                    print(f"⚠️ Signal rejeté | Score={score}")
+                    continue
 
                 signal = check_signal(df)
 
