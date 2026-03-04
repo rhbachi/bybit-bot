@@ -9,6 +9,16 @@ print("⚙️ CONFIG START", flush=True)
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 
+# ================= TELEGRAM =================
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# ================= RISK =================
+
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "2"))
+COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "300"))
+
 # =========================
 # TRADING SETTINGS
 # =========================

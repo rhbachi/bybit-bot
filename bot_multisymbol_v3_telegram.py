@@ -1,10 +1,11 @@
 import os
 import time
 import sqlite3
+import requests
 import pandas as pd
 from threading import Thread
 from flask import Flask, jsonify
-from notifier import send_telegram
+
 from config import (
     exchange,
     SYMBOLS,
@@ -13,20 +14,38 @@ from config import (
     RISK_PER_TRADE,
     LEVERAGE,
     SCORE_THRESHOLD,
-    MAX_POSITIONS
+    MAX_POSITIONS,
+    COOLDOWN_SECONDS,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID
 )
 
 from strategy import apply_indicators, check_signal
 
-# =========================
-# CREATE DATA FOLDER
-# =========================
+
+# ================= TELEGRAM =================
+
+def send_telegram(msg):
+
+    if TELEGRAM_BOT_TOKEN == "" or TELEGRAM_CHAT_ID == "":
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": msg
+    }
+
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except:
+        pass
+
+
+# ================= DATABASE =================
 
 os.makedirs("data", exist_ok=True)
-
-# =========================
-# DATABASE
-# =========================
 
 conn = sqlite3.connect("data/trades.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -44,9 +63,8 @@ timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 
 conn.commit()
 
-# =========================
-# DASHBOARD API
-# =========================
+
+# ================= API DASHBOARD =================
 
 app = Flask(__name__)
 signals_cache = []
@@ -55,14 +73,20 @@ signals_cache = []
 def get_signals():
     return jsonify(signals_cache)
 
+
 def start_api():
+
     print("🌐 API server started on port 5001", flush=True)
+
     app.run(host="0.0.0.0", port=5001)
 
 
-# =========================
-# CORRELATION GROUPS
-# =========================
+# ================= COOLDOWN =================
+
+last_trade_time = {}
+
+
+# ================= CORRELATION GROUPS =================
 
 CORRELATION_GROUPS = {
 
@@ -77,13 +101,10 @@ CORRELATION_GROUPS = {
         "ADA/USDT:USDT",
         "DOT/USDT:USDT"
     ]
-
 }
 
 
-# =========================
-# POSITION CHECK
-# =========================
+# ================= OPEN POSITIONS =================
 
 def get_open_positions():
 
@@ -123,9 +144,7 @@ def correlated_position_exists(symbol, open_positions):
     return False
 
 
-# =========================
-# POSITION SIZE
-# =========================
+# ================= POSITION SIZE =================
 
 def size_from_score(score):
 
@@ -152,7 +171,6 @@ def calculate_position_size(symbol, price, score):
 
     qty = position_value / price
 
-    # minimum qty protection
     min_qty = 0.001
 
     if "ETH" in symbol:
@@ -166,9 +184,7 @@ def calculate_position_size(symbol, price, score):
     return round(qty, 4)
 
 
-# =========================
-# FETCH DATA
-# =========================
+# ================= DATA =================
 
 def fetch_ohlcv(symbol):
 
@@ -182,9 +198,7 @@ def fetch_ohlcv(symbol):
     return df
 
 
-# =========================
-# TRADE EXECUTION
-# =========================
+# ================= TRADE =================
 
 def open_trade(symbol, side, price, qty):
 
@@ -203,21 +217,41 @@ def open_trade(symbol, side, price, qty):
         tp = price - (sl - price) * RR
         order_side = "sell"
 
-    exchange.create_market_order(
-        symbol,
-        order_side,
-        qty,
+    qty = float(qty)
+
+    print(f"📦 Order params | {symbol} | {order_side} | qty={qty}")
+
+    exchange.create_order(
+        symbol=symbol,
+        type="market",
+        side=order_side,
+        amount=qty,
         params={
-            "stopLoss": sl,
-            "takeProfit": tp,
+            "stopLoss": round(sl, 4),
+            "takeProfit": round(tp, 4),
             "slTriggerBy": "LastPrice",
             "tpTriggerBy": "LastPrice"
         }
     )
 
     print(
-        f"📈 TRADE | {symbol} | {side.upper()} | Qty={qty} | SL={round(sl,2)} | TP={round(tp,2)}",
+        f"📈 TRADE | {symbol} | {side.upper()} | Qty={qty}",
         flush=True
+    )
+
+    send_telegram(
+        f"""
+🚨 TRADE OUVERT
+
+Symbol: {symbol}
+Side: {side.upper()}
+Entry: {round(price,4)}
+
+SL: {round(sl,4)}
+TP: {round(tp,4)}
+
+Qty: {qty}
+"""
     )
 
     cursor.execute(
@@ -227,16 +261,18 @@ def open_trade(symbol, side, price, qty):
 
     conn.commit()
 
+    last_trade_time[symbol] = time.time()
 
-# =========================
-# BOT LOOP
-# =========================
+
+# ================= BOT LOOP =================
 
 def run_bot():
 
     global signals_cache
 
-    print("🤖 MultiSymbol Bot V3 démarré", flush=True)
+    print("🤖 MultiSymbol Bot V3.1 démarré", flush=True)
+
+    send_telegram("🤖 MultiSymbol Bot démarré")
 
     while True:
 
@@ -266,19 +302,25 @@ def run_bot():
                 if signal is None:
                     continue
 
-                print(f"🚦 Signal {symbol} = {signal} | Score={score}", flush=True)
+                print(f"🚦 Signal {symbol} = {signal} | Score={score}")
 
                 if score < SCORE_THRESHOLD:
-                    print("⚠️ Signal rejeté", flush=True)
+                    print("⚠️ Signal rejeté")
                     continue
 
                 if len(open_positions) >= MAX_POSITIONS:
-                    print("⚠️ Max positions atteint", flush=True)
+                    print("⚠️ Max positions atteint")
                     continue
 
                 if correlated_position_exists(symbol, open_positions):
-                    print("⚠️ Position corrélée détectée", flush=True)
+                    print("⚠️ Position corrélée détectée")
                     continue
+
+                if symbol in last_trade_time:
+
+                    if time.time() - last_trade_time[symbol] < COOLDOWN_SECONDS:
+                        print("⏳ Cooldown actif")
+                        continue
 
                 price = df.iloc[-1].close
 
@@ -286,18 +328,18 @@ def run_bot():
 
                 open_trade(symbol, signal, price, qty)
 
-            time.sleep(60)
+            time.sleep(30)
 
         except Exception as e:
 
-            print("❌ Erreur MultiSymbol:", e, flush=True)
+            print("❌ Erreur MultiSymbol:", e)
+
+            send_telegram(f"❌ Bot error: {e}")
 
             time.sleep(30)
 
 
-# =========================
-# START
-# =========================
+# ================= START =================
 
 Thread(target=start_api, daemon=True).start()
 
