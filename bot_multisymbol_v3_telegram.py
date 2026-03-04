@@ -35,16 +35,22 @@ def send_telegram(msg):
 
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": msg
+        "text": msg.strip()
     }
 
     try:
-        r = requests.post(url, json=payload, timeout=5)
+
+        print("📨 Sending telegram:", msg)
+
+        r = requests.post(url, data=payload, timeout=10)
+
+        print("📩 Telegram status:", r.status_code)
 
         if r.status_code != 200:
-            print("❌ Telegram error:", r.text)
+            print("❌ Telegram response:", r.text)
 
     except Exception as e:
+
         print("❌ Telegram exception:", e)
 
 
@@ -73,6 +79,7 @@ conn.commit()
 
 app = Flask(__name__)
 signals_cache = []
+
 
 @app.route("/api/signals")
 def get_signals():
@@ -239,10 +246,7 @@ def open_trade(symbol, side, price, qty):
         }
     )
 
-    print(
-        f"📈 TRADE | {symbol} | {side.upper()} | Qty={qty}",
-        flush=True
-    )
+    print(f"📈 TRADE | {symbol} | {side.upper()} | Qty={qty}", flush=True)
 
     send_telegram(
 f"""
@@ -250,6 +254,7 @@ f"""
 
 Symbol: {symbol}
 Side: {side.upper()}
+
 Entry: {round(price,4)}
 
 SL: {round(sl,4)}
@@ -275,17 +280,9 @@ def run_bot():
 
     global signals_cache
 
-    print("🤖 MultiSymbol Bot V3.2 démarré", flush=True)
+    print("🤖 MultiSymbol Bot démarré", flush=True)
 
-    send_telegram(
-f"""
-🤖 BOT STARTED
-
-Symbols: {len(SYMBOLS)}
-Timeframe: {TIMEFRAME}
-Max positions: {MAX_POSITIONS}
-"""
-    )
+    send_telegram("🤖 BOT STARTED OK")
 
     while True:
 
@@ -329,7 +326,7 @@ Max positions: {MAX_POSITIONS}
 
                 if len(open_positions) >= MAX_POSITIONS:
 
-                    msg = f"⚠️ Max positions atteint\nSignal ignoré : {symbol}"
+                    msg = f"⚠️ Max positions atteint\nTrade ignoré : {symbol}"
 
                     print(msg)
 
