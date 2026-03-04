@@ -1,11 +1,7 @@
 import time
 import threading
 import pandas as pd
-
-from notifier import send_telegram
-
-send_telegram("🤖 BOT START TEST TELEGRAM")
-
+from config import *
 from flask import Flask, jsonify
 from notifier import send_telegram
 from strategy import apply_indicators, check_signal
