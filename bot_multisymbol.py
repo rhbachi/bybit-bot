@@ -10,28 +10,32 @@ from strategy import apply_indicators, check_signal
 from risk import calculate_position_size
 from notifier import send_telegram
 from logger import init_logger, log_trade
+from database import init_db, insert_trade, get_recent_trades
 
 
 # =========================
-# FLASK API
+# FLASK API (HEDGE FUND)
 # =========================
 app = Flask(__name__)
-signals_memory = []
-
-
-@app.route("/api/signals")
-def api_signals():
-    return jsonify(signals_memory[-50:])
 
 
 @app.route("/api/health")
 def api_health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "bot": "MULTI_SYMBOL"})
+
+
+@app.route("/api/signals")
+def api_signals():
+    try:
+        return jsonify(get_recent_trades(50))
+    except Exception as e:
+        print(f"❌ API error: {e}", flush=True)
+        return jsonify([])
 
 
 def run_api():
     print("🌐 API server started on port 5001", flush=True)
-    app.run(host="0.0.0.0", port=5001)
+    app.run(host="0.0.0.0", port=5001, debug=False, threaded=True)
 
 
 # =========================
@@ -72,6 +76,11 @@ def init_symbol_state(symbol):
     state[symbol] = {
         "in_position": False,
         "last_trade_time": None,
+        "entry_price": 0,
+        "qty": 0,
+        "side": None,
+        "sl": 0,
+        "tp": 0,
     }
 
 
@@ -105,9 +114,10 @@ def get_open_positions():
 def run():
     global daily_loss, consecutive_losses
 
-    print("🤖 MultiSymbol Bot PRO démarré", flush=True)
+    print("🤖 MultiSymbol Bot PRO (HEDGE FUND PHASE 1)", flush=True)
     send_telegram("🤖 MultiSymbol Bot PRO démarré")
     init_logger()
+    init_db()
 
     for symbol in SYMBOLS:
         init_symbol_state(symbol)
@@ -182,59 +192,66 @@ def run():
                             symbol,
                             "buy" if signal == "long" else "sell",
                             qty,
-                            params={
-                                "stopLoss": stop_loss,
-                                "takeProfit": take_profit,
-                                "slTriggerBy": "LastPrice",
-                                "tpTriggerBy": "LastPrice",
-                            },
                         )
 
                     s["in_position"] = True
                     s["last_trade_time"] = time.time()
+                    s["entry_price"] = price
+                    s["qty"] = qty
+                    s["side"] = signal
+                    s["sl"] = stop_loss
+                    s["tp"] = take_profit
 
-                    # 🔥 Ajouter au dashboard
-                    signals_memory.append({
-                        "symbol": symbol,
-                        "side": side,
-                        "entry": price,
-                        "sl": stop_loss,
-                        "tp": take_profit,
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
-
-                    print(
-                        f"📈 TRADE | {symbol} | {side} | "
-                        f"SL={stop_loss} | TP={take_profit} | Qty={qty}",
-                        flush=True,
-                    )
+                    print(f"📈 TRADE OUVERT {symbol} {side}", flush=True)
 
                 # ===== CHECK CLOSE =====
-                positions = exchange.fetch_positions([symbol])
-                pos = next((p for p in positions if p.get("symbol") == symbol), None)
+                if s["in_position"]:
 
-                if s["in_position"] and pos and safe_float(pos.get("contracts")) == 0:
-                    pnl = safe_float(pos.get("realizedPnl"))
+                    current_price = df.iloc[-1].close
 
-                    if pnl < 0:
-                        daily_loss += abs(pnl)
-                        consecutive_losses += 1
+                    exit_condition = False
+
+                    if s["side"] == "long":
+                        if current_price <= s["sl"] or current_price >= s["tp"]:
+                            exit_condition = True
                     else:
-                        consecutive_losses = 0
+                        if current_price >= s["sl"] or current_price <= s["tp"]:
+                            exit_condition = True
 
-                    signals_memory.append({
-                        "symbol": symbol,
-                        "side": "CLOSE",
-                        "pnl": pnl,
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
+                    if exit_condition:
 
-                    log_trade(symbol, "CLOSED", 0, 0, 0, pnl, "CLOSED")
-                    s["in_position"] = False
+                        if s["side"] == "long":
+                            pnl = (current_price - s["entry_price"]) * s["qty"]
+                        else:
+                            pnl = (s["entry_price"] - current_price) * s["qty"]
 
-                    print(f"📊 CLOSE {symbol} | PnL={pnl}", flush=True)
+                        result = "WIN" if pnl > 0 else "LOSS"
 
-            time.sleep(60)
+                        insert_trade(
+                            symbol=symbol,
+                            side=s["side"],
+                            entry=s["entry_price"],
+                            exit_price=current_price,
+                            sl=s["sl"],
+                            tp=s["tp"],
+                            qty=s["qty"],
+                            pnl=pnl,
+                            result=result
+                        )
+
+                        if pnl < 0:
+                            daily_loss += abs(pnl)
+                            consecutive_losses += 1
+                        else:
+                            consecutive_losses = 0
+
+                        log_trade(symbol, "CLOSED", 0, 0, 0, pnl, result)
+
+                        s["in_position"] = False
+
+                        print(f"📊 CLOSE {symbol} | PnL={pnl}", flush=True)
+
+            time.sleep(30)
 
         except Exception as e:
             print("❌ Bot Error:", e, flush=True)
