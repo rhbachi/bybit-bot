@@ -1,4 +1,5 @@
 import time
+import os
 import sqlite3
 import pandas as pd
 from flask import Flask, jsonify
@@ -11,10 +12,17 @@ from config import (
     CAPITAL,
     RISK_PER_TRADE,
     LEVERAGE,
-    SCORE_THRESHOLD,
+    SCORE_THRESHOLD
 )
 
 from strategy import apply_indicators, check_signal
+
+
+# =========================
+# CREATE DATA FOLDER
+# =========================
+
+os.makedirs("data", exist_ok=True)
 
 # =========================
 # DATABASE
@@ -39,19 +47,24 @@ timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 
 conn.commit()
 
+
 # =========================
-# API DASHBOARD
+# API FOR DASHBOARD
 # =========================
 
 app = Flask(__name__)
 signals_cache = []
 
+
 @app.route("/api/signals")
-def get_signals():
+def api_signals():
     return jsonify(signals_cache)
 
+
 def start_api():
+    print("🌐 API server started on port 5001", flush=True)
     app.run(host="0.0.0.0", port=5001)
+
 
 # =========================
 # POSITION SIZE
@@ -67,8 +80,9 @@ def calculate_position_size(price):
 
     return round(qty, 4)
 
+
 # =========================
-# FETCH DATA
+# FETCH MARKET DATA
 # =========================
 
 def fetch_ohlcv(symbol):
@@ -77,10 +91,11 @@ def fetch_ohlcv(symbol):
 
     df = pd.DataFrame(
         ohlcv,
-        columns=["time","open","high","low","close","volume"]
+        columns=["time", "open", "high", "low", "close", "volume"]
     )
 
     return df
+
 
 # =========================
 # TRADE EXECUTION
@@ -88,17 +103,19 @@ def fetch_ohlcv(symbol):
 
 def open_trade(symbol, side, price, qty):
 
-    rr = 2.3
-    sl_pct = 0.006
+    RR = 2.3
+    SL_PCT = 0.006
 
     if side == "long":
-        sl = price * (1 - sl_pct)
-        tp = price + (price - sl) * rr
+
+        sl = price * (1 - SL_PCT)
+        tp = price + (price - sl) * RR
         order_side = "buy"
 
     else:
-        sl = price * (1 + sl_pct)
-        tp = price - (sl - price) * rr
+
+        sl = price * (1 + SL_PCT)
+        tp = price - (sl - price) * RR
         order_side = "sell"
 
     exchange.create_market_order(
@@ -113,7 +130,11 @@ def open_trade(symbol, side, price, qty):
         }
     )
 
-    print(f"📈 TRADE | {symbol} | {side.upper()} | SL={round(sl,2)} | TP={round(tp,2)} | Qty={qty}", flush=True)
+    print(
+        f"📈 TRADE | {symbol} | {side.upper()} | SL={round(sl,2)} | TP={round(tp,2)} | Qty={qty}",
+        flush=True
+    )
+
 
 # =========================
 # MAIN BOT LOOP
@@ -171,10 +192,11 @@ def run_bot():
 
             time.sleep(30)
 
+
 # =========================
 # START THREADS
 # =========================
 
-Thread(target=start_api).start()
+Thread(target=start_api, daemon=True).start()
 
 run_bot()
