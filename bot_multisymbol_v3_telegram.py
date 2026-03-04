@@ -27,7 +27,8 @@ from strategy import apply_indicators, check_signal
 
 def send_telegram(msg):
 
-    if TELEGRAM_BOT_TOKEN == "" or TELEGRAM_CHAT_ID == "":
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Telegram non configuré")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -38,9 +39,13 @@ def send_telegram(msg):
     }
 
     try:
-        requests.post(url, json=payload, timeout=5)
-    except:
-        pass
+        r = requests.post(url, json=payload, timeout=5)
+
+        if r.status_code != 200:
+            print("❌ Telegram error:", r.text)
+
+    except Exception as e:
+        print("❌ Telegram exception:", e)
 
 
 # ================= DATABASE =================
@@ -240,7 +245,7 @@ def open_trade(symbol, side, price, qty):
     )
 
     send_telegram(
-        f"""
+f"""
 🚨 TRADE OUVERT
 
 Symbol: {symbol}
@@ -270,9 +275,17 @@ def run_bot():
 
     global signals_cache
 
-    print("🤖 MultiSymbol Bot V3.1 démarré", flush=True)
+    print("🤖 MultiSymbol Bot V3.2 démarré", flush=True)
 
-    send_telegram("🤖 MultiSymbol Bot démarré")
+    send_telegram(
+f"""
+🤖 BOT STARTED
+
+Symbols: {len(SYMBOLS)}
+Timeframe: {TIMEFRAME}
+Max positions: {MAX_POSITIONS}
+"""
+    )
 
     while True:
 
@@ -305,21 +318,41 @@ def run_bot():
                 print(f"🚦 Signal {symbol} = {signal} | Score={score}")
 
                 if score < SCORE_THRESHOLD:
-                    print("⚠️ Signal rejeté")
+
+                    msg = f"⚠️ Signal rejeté\n{symbol}\nScore={score}"
+
+                    print(msg)
+
+                    send_telegram(msg)
+
                     continue
 
                 if len(open_positions) >= MAX_POSITIONS:
-                    print("⚠️ Max positions atteint")
+
+                    msg = f"⚠️ Max positions atteint\nSignal ignoré : {symbol}"
+
+                    print(msg)
+
+                    send_telegram(msg)
+
                     continue
 
                 if correlated_position_exists(symbol, open_positions):
-                    print("⚠️ Position corrélée détectée")
+
+                    msg = f"⚠️ Position corrélée détectée\nTrade ignoré : {symbol}"
+
+                    print(msg)
+
+                    send_telegram(msg)
+
                     continue
 
                 if symbol in last_trade_time:
 
                     if time.time() - last_trade_time[symbol] < COOLDOWN_SECONDS:
+
                         print("⏳ Cooldown actif")
+
                         continue
 
                 price = df.iloc[-1].close
@@ -334,7 +367,7 @@ def run_bot():
 
             print("❌ Erreur MultiSymbol:", e)
 
-            send_telegram(f"❌ Bot error: {e}")
+            send_telegram(f"❌ BOT ERROR\n{e}")
 
             time.sleep(30)
 
