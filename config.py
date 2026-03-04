@@ -13,7 +13,7 @@ BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 # TRADING SETTINGS
 # =========================
 TIMEFRAME = os.getenv("TIMEFRAME", "5m")
-
+SCORE_THRESHOLD = int(os.getenv("SCORE_THRESHOLD", "3"))
 SYMBOL = os.getenv("SYMBOL", "ETH/USDT:USDT")
 
 CAPITAL = float(os.getenv("CAPITAL", "200"))
