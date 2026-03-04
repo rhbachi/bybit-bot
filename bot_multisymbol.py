@@ -17,8 +17,6 @@ from database import init_db, insert_trade, get_recent_trades
 # FLASK API (HEDGE FUND)
 # =========================
 app = Flask(__name__)
-
-
 @app.route("/api/health")
 def api_health():
     return jsonify({"status": "ok", "bot": "MULTI_SYMBOL"})
@@ -44,19 +42,14 @@ def run_api():
 CAPITAL = float(os.getenv("CAPITAL", 50))
 LEVERAGE = int(os.getenv("LEVERAGE", 3))
 TIMEFRAME = os.getenv("TIMEFRAME", "15m")
-
 PAPER_TRADING = os.getenv("PAPER_TRADING", "false").lower() == "true"
-
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", 2))
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", 0.02))
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", 300))
-
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", 10)) / 100
 MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", 3))
-
 SL_ATR_MULTIPLIER = float(os.getenv("SL_ATR_MULTIPLIER", 1.5))
 TP_ATR_MULTIPLIER = float(os.getenv("TP_ATR_MULTIPLIER", 3.0))
-
 
 # =========================
 state = {}
@@ -64,13 +57,11 @@ current_day = datetime.now(timezone.utc).date()
 daily_loss = 0.0
 consecutive_losses = 0
 
-
 def safe_float(v, default=0.0):
     try:
         return float(v) if v is not None else default
     except:
         return default
-
 
 def init_symbol_state(symbol):
     state[symbol] = {
@@ -82,7 +73,6 @@ def init_symbol_state(symbol):
         "sl": 0,
         "tp": 0,
     }
-
 
 def reset_daily():
     global current_day, daily_loss, consecutive_losses

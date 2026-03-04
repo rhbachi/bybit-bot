@@ -236,7 +236,7 @@ def get_recent_signals():
     print(f"📊 Alternance - {len(formatted_signals)} signaux affichés", flush=True)
     return jsonify(formatted_signals)
 
-    @app.route('/api/check_balance')
+@app.route('/api/check_balance')
 @requires_auth
 def check_balance():
     """Vérifie le solde et la configuration des bots"""
