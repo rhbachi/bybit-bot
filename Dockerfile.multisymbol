@@ -9,5 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copie du code
 COPY . .
 
-# Commande pour lancer le bot multi-symboles
-CMD ["python", "-u", "bot_multisymbol_v4.py"]
+ENV PYTHONUNBUFFERED=1
+
+# Lancement dynamique du bot
+CMD ["sh", "-c", "${START_CMD:-python -u bot_multisymbol_v4.py}"]
