@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Commande pour lancer le bot multi-symboles
-CMD ["python", "-u", "bot_multisymbol_v4.py"]
+CMD ["python", "-u", "bot_multisymbol_v5.py"]
