@@ -8,6 +8,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 def send_telegram(message):
 
     if not BOT_TOKEN or not CHAT_ID:
+        print("⚠️ Telegram not configured")
         return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -18,6 +19,14 @@ def send_telegram(message):
     }
 
     try:
-        requests.post(url, json=payload, timeout=5)
-    except Exception:
-        pass
+
+        r = requests.post(url, json=payload, timeout=10)
+
+        print(f"📩 Telegram status: {r.status_code}")
+
+        if r.status_code != 200:
+            print("Telegram error:", r.text)
+
+    except Exception as e:
+
+        print("Telegram send error:", e)
