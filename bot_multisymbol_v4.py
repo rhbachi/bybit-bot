@@ -31,7 +31,7 @@ def fetch_data(symbol):
 
     df = pd.DataFrame(
         ohlcv,
-        columns=["time","open","high","low","close","volume"]
+        columns=["time", "open", "high", "low", "close", "volume"]
     )
 
     return df
@@ -45,12 +45,47 @@ def position_size(price):
 
     qty = position_value / price
 
-    return round(qty, 4)
+    return round(qty, 6)
+
+
+# ===============================
+# BYBIT PRECISION FIX
+# ===============================
+
+def adjust_qty(symbol, qty, price):
+
+    try:
+
+        market = exchange.market(symbol)
+
+        min_amount = market["limits"]["amount"]["min"]
+        precision = market["precision"]["amount"]
+
+        qty = round(qty, precision)
+
+        if qty < min_amount:
+            qty = min_amount
+
+        min_notional = 5
+
+        if qty * price < min_notional:
+            qty = min_notional / price
+            qty = round(qty, precision)
+
+        return qty
+
+    except Exception as e:
+
+        print("precision error", e)
+
+        return qty
 
 
 def open_trade(symbol, side, price, score):
 
     qty = position_size(price)
+
+    qty = adjust_qty(symbol, qty, price)
 
     if qty <= 0:
         return
@@ -64,12 +99,12 @@ def open_trade(symbol, side, price, score):
             qty
         )
 
-        add_position(symbol,{
-            "side":side,
-            "entry":price,
-            "qty":qty,
-            "score":score,
-            "risk":CAPITAL*RISK_PER_TRADE
+        add_position(symbol, {
+            "side": side,
+            "entry": price,
+            "qty": qty,
+            "score": score,
+            "risk": CAPITAL * RISK_PER_TRADE
         })
 
         send_telegram(
@@ -87,7 +122,7 @@ Qty: {qty}
 
     except Exception as e:
 
-        send_telegram(f"❌ Trade error {symbol}\n{e}")
+        print(f"Trade error {symbol}: {e}")
 
 
 def bot_loop():
@@ -100,52 +135,58 @@ def bot_loop():
 
         for symbol in SYMBOLS:
 
-            print("⏳ Analyse",symbol)
+            try:
 
-            df = fetch_data(symbol)
+                print("⏳ Analyse", symbol)
 
-            df = apply_indicators(df)
+                df = fetch_data(symbol)
 
-            signal, score = check_signal(df)
+                df = apply_indicators(df)
 
-            if signal is None:
-                continue
+                signal, score = check_signal(df)
 
-            print(f"🚦 {symbol} {signal} score={score}")
-
-            if score < SCORE_THRESHOLD:
-                continue
-
-            price = df.close.iloc[-1]
-
-            if symbol in positions:
-                continue
-
-            if len(positions) >= MAX_POSITIONS:
-
-                lowest = lowest_score()
-
-                if lowest and score > lowest[1]["score"]:
-
-                    remove_position(lowest[0])
-
-                    send_telegram(
-                        f"🔄 Replace trade {lowest[0]} with {symbol}"
-                    )
-
-                else:
+                if signal is None:
                     continue
 
-            if not can_open_trade(positions, CAPITAL, RISK_PER_TRADE):
-                continue
+                print(f"🚦 {symbol} {signal} score={score}")
 
-            open_trade(symbol, signal, price, score)
+                if score < SCORE_THRESHOLD:
+                    continue
 
-            signals_cache.append({
-                "symbol":symbol,
-                "signal":signal,
-                "score":score
-            })
+                price = df.close.iloc[-1]
+
+                if symbol in positions:
+                    continue
+
+                if len(positions) >= MAX_POSITIONS:
+
+                    lowest = lowest_score()
+
+                    if lowest and score > lowest[1]["score"]:
+
+                        remove_position(lowest[0])
+
+                        send_telegram(
+                            f"🔄 Replace trade {lowest[0]} with {symbol}"
+                        )
+
+                    else:
+                        continue
+
+                if not can_open_trade(positions, CAPITAL, RISK_PER_TRADE):
+                    continue
+
+                open_trade(symbol, signal, price, score)
+
+                signals_cache.append({
+                    "symbol": symbol,
+                    "signal": signal,
+                    "score": score
+                })
+
+            except Exception as e:
+
+                print("Bot error:", e)
 
         time.sleep(120)
 
