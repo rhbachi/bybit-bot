@@ -2,6 +2,7 @@ import time
 import threading
 import pandas as pd
 import math
+
 from config import *
 from flask import Flask, jsonify
 from notifier import send_telegram
@@ -21,6 +22,10 @@ def start_api():
     print("🌐 API server started on port 5001")
     app.run(host="0.0.0.0", port=5001)
 
+
+# ================================
+# FETCH DATA
+# ================================
 
 def fetch_data(symbol):
 
@@ -42,49 +47,107 @@ def position_size(price, atr):
 
     risk = CAPITAL * RISK_PER_TRADE
 
-    stop_distance = atr * 2
+    stop_distance = atr * SL_ATR_MULTIPLIER
+
+    if stop_distance == 0:
+        return None
 
     qty = risk / stop_distance
 
     qty = qty * LEVERAGE
 
-    return round(qty, 6)
+    return qty
 
 
 # ================================
 # PRECISION ENGINE
 # ================================
 
-def adjust_qty(symbol, qty):
+def adjust_qty(symbol, qty, price):
 
-    market = exchange.market(symbol)
+    try:
 
-    min_amount = market["limits"]["amount"]["min"]
-    precision = market["precision"]["amount"]
+        market = exchange.market(symbol)
 
-    if isinstance(precision, float):
-        precision = abs(int(round(-math.log10(precision))))
+        min_amount = market["limits"]["amount"]["min"]
+        precision = market["precision"]["amount"]
 
-    qty = round(qty, precision)
+        if isinstance(precision, float):
+            precision = abs(int(round(-math.log10(precision))))
 
-    if qty < min_amount:
+        qty = round(qty, precision)
+
+        if qty < min_amount:
+            return None
+
+        # check notional
+        if qty * price < 5:
+            return None
+
+        return qty
+
+    except Exception as e:
+
+        send_telegram(f"⚠️ Precision error {symbol}\n{e}")
         return None
 
-    return qty
 
+# ================================
+# MARGIN CHECK
+# ================================
+
+def margin_available(price, qty):
+
+    try:
+
+        balance = exchange.fetch_balance()
+
+        available = balance["USDT"]["free"]
+
+        required_margin = (qty * price) / LEVERAGE
+
+        if required_margin > available:
+
+            send_telegram(
+f"""⚠️ Not enough margin
+
+Required: {round(required_margin,2)}
+Available: {round(available,2)}
+"""
+            )
+
+            return False
+
+        return True
+
+    except Exception as e:
+
+        send_telegram(f"⚠️ Balance check error\n{e}")
+        return False
+
+
+# ================================
+# OPEN TRADE
+# ================================
 
 def open_trade(symbol, side, price, atr, score):
 
     qty = position_size(price, atr)
 
-    qty = adjust_qty(symbol, qty)
+    if qty is None:
+        return
+
+    qty = adjust_qty(symbol, qty, price)
 
     if qty is None:
         return
 
+    if not margin_available(price, qty):
+        return
+
     try:
 
-        order = exchange.create_order(
+        exchange.create_order(
             symbol,
             "market",
             "buy" if side == "long" else "sell",
@@ -93,14 +156,13 @@ def open_trade(symbol, side, price, atr, score):
 
         send_telegram(
 f"""
-📈 TRADE OPEN V6
+📈 TRADE OPEN V6.1
 
 Symbol: {symbol}
 Side: {side}
 Score: {score}
 
 ATR: {round(atr,4)}
-
 Qty: {qty}
 """
         )
@@ -116,7 +178,7 @@ Qty: {qty}
 
 def bot_loop():
 
-    send_telegram("🚀 BOT V6 STARTED")
+    send_telegram("🚀 BOT V6.1 STARTED")
 
     while True:
 
@@ -124,7 +186,7 @@ def bot_loop():
 
             try:
 
-                print("⏳ Analyse",symbol)
+                print("⏳ Analyse", symbol)
 
                 df = fetch_data(symbol)
 
@@ -143,14 +205,14 @@ def bot_loop():
                 open_trade(symbol, signal, price, atr, score)
 
                 signals_cache.append({
-                    "symbol":symbol,
-                    "signal":signal,
-                    "score":score
+                    "symbol": symbol,
+                    "signal": signal,
+                    "score": score
                 })
 
             except Exception as e:
 
-                print("Bot error:",e)
+                print("Bot error:", e)
 
         time.sleep(120)
 
