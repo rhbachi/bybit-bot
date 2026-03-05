@@ -7,8 +7,6 @@ from notifier import send_telegram
 from strategy import apply_indicators, check_signal
 from portfolio import add_position, remove_position, get_positions, lowest_score
 from risk_engine import can_open_trade
-from notifier import send_telegram
-send_telegram("🚀 BOT V4.3 STARTED")
 
 signals_cache = []
 
@@ -93,8 +91,6 @@ def adjust_qty(symbol, qty, price):
 
 
 def open_trade(symbol, side, price, score):
-
-    def open_trade(symbol, side, price, score):
 
     qty = position_size(price)
 
@@ -205,6 +201,8 @@ def bot_loop():
 
 
 if __name__ == "__main__":
+
+    send_telegram("🚀 BOT V4.3 STARTED")
 
     t = threading.Thread(target=start_api)
 
