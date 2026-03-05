@@ -1,179 +1,76 @@
 import pandas as pd
-import numpy as np
-
-"""
-STRATÉGIE PRINCIPALE - BOT 1 (VERSION MULTI-FACTEURS)
-
-Structure:
-Zone 1 → détection momentum
-Zone 2 → continuation
-Score multi-facteurs → validation trade
-"""
-
-EMA_FAST = 20
-EMA_SLOW = 50
-RSI_PERIOD = 14
-VOLUME_PERIOD = 20
-MIN_EMA_SLOPE = 0.0005
-
-_zone_1_level = None
-_zone_1_direction = None
 
 
-def apply_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def apply_indicators(df):
 
-    df["ema20"] = df["close"].ewm(span=EMA_FAST).mean()
-    df["ema50"] = df["close"].ewm(span=EMA_SLOW).mean()
+    df["ema20"] = df.close.ewm(span=20).mean()
+    df["ema50"] = df.close.ewm(span=50).mean()
 
-    df["ema_slope"] = df["ema20"].diff()
+    tr1 = df.high - df.low
+    tr2 = abs(df.high - df.close.shift())
+    tr3 = abs(df.low - df.close.shift())
 
-    # RSI
-    delta = df["close"].diff()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, abs(delta), 0)
+    df["atr"] = tr.rolling(14).mean()
 
-    avg_gain = pd.Series(gain).rolling(RSI_PERIOD).mean()
-    avg_loss = pd.Series(loss).rolling(RSI_PERIOD).mean()
+    delta = df.close.diff()
+
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
 
     rs = avg_gain / avg_loss
+
     df["rsi"] = 100 - (100 / (1 + rs))
 
-    # volume average
-    df["volume_avg"] = df["volume"].rolling(VOLUME_PERIOD).mean()
+    df["vol_ma"] = df.volume.rolling(20).mean()
 
     return df
 
 
-def crypto_doji(row):
+def market_regime(df):
 
-    body = abs(row.close - row.open)
-    candle_range = row.high - row.low
+    ema20 = df.ema20.iloc[-1]
+    ema50 = df.ema50.iloc[-1]
 
-    if candle_range == 0:
-        return None
+    if ema20 > ema50:
+        return "bull"
 
-    upper_wick = row.high - max(row.open, row.close)
-    lower_wick = min(row.open, row.close) - row.low
+    if ema20 < ema50:
+        return "bear"
 
-    if body < candle_range * 0.6:
-        return None
-
-    if row.close > row.open and upper_wick < candle_range * 0.2:
-        return "strong_bullish"
-
-    if row.close < row.open and lower_wick < candle_range * 0.2:
-        return "strong_bearish"
-
-    return None
-
-
-def detect_zone_1(df):
-
-    global _zone_1_level, _zone_1_direction
-
-    last = df.iloc[-1]
-    pattern = crypto_doji(last)
-
-    if pattern is None:
-        return None
-
-    if last.close > last.ema20 and pattern == "strong_bullish":
-        _zone_1_level = last.low
-        _zone_1_direction = "long"
-        return "zone_1_long"
-
-    if last.close < last.ema20 and pattern == "strong_bearish":
-        _zone_1_level = last.high
-        _zone_1_direction = "short"
-        return "zone_1_short"
-
-    return None
-
-
-def detect_zone_2(df):
-
-    global _zone_1_level, _zone_1_direction
-
-    if _zone_1_level is None:
-        return None
-
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    if abs(df.ema_slope.iloc[-1]) < MIN_EMA_SLOPE:
-        return None
-
-    if _zone_1_direction == "long" and last.low > prev.low:
-        return "long"
-
-    if _zone_1_direction == "short" and last.high < prev.high:
-        return "short"
-
-    return None
-
-
-def compute_score(df, signal):
-
-    score = 0
-    last = df.iloc[-1]
-
-    # trend
-    if last.ema20 > last.ema50 and signal == "long":
-        score += 1
-
-    if last.ema20 < last.ema50 and signal == "short":
-        score += 1
-
-    # RSI momentum
-    if last.rsi > 55 and signal == "long":
-        score += 1
-
-    if last.rsi < 45 and signal == "short":
-        score += 1
-
-    # volume confirmation
-    if last.volume > last.volume_avg:
-        score += 1
-
-    # breakout structure
-    if signal == "long":
-        if last.close > df.high.iloc[-5:-1].max():
-            score += 1
-
-    if signal == "short":
-        if last.close < df.low.iloc[-5:-1].min():
-            score += 1
-
-    return score
+    return "range"
 
 
 def check_signal(df):
 
-    detect_zone_1(df)
-    signal = detect_zone_2(df)
+    last = df.iloc[-1]
 
-    if signal is None:
-        return None, 0
+    regime = market_regime(df)
 
-    score = compute_score(df, signal)
+    score = 0
+    signal = None
 
-    return signal, score
+    if regime == "bull" and last.close > last.ema20:
+        signal = "long"
+        score += 2
 
+    if regime == "bear" and last.close < last.ema20:
+        signal = "short"
+        score += 2
 
-def reset_state():
+    if last.rsi < 35:
+        score += 1
 
-    global _zone_1_level, _zone_1_direction
+    if last.rsi > 65:
+        score += 1
 
-    _zone_1_level = None
-    _zone_1_direction = None
+    if last.volume > last.vol_ma:
+        score += 1
 
-    print("🔄 État stratégie réinitialisé", flush=True)
+    atr = last.atr
 
-
-def get_state():
-
-    return {
-        "zone_1_level": _zone_1_level,
-        "zone_1_direction": _zone_1_direction,
-    }
+    return signal, score, atr
