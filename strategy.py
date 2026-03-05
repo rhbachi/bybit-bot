@@ -3,8 +3,11 @@ import pandas as pd
 
 def apply_indicators(df):
 
+    # EMA
     df["ema20"] = df.close.ewm(span=20).mean()
     df["ema50"] = df.close.ewm(span=50).mean()
+
+    # ================= ATR =================
 
     tr1 = df.high - df.low
     tr2 = abs(df.high - df.close.shift())
@@ -13,6 +16,8 @@ def apply_indicators(df):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
     df["atr"] = tr.rolling(14).mean()
+
+    # ================= RSI =================
 
     delta = df.close.diff()
 
@@ -25,6 +30,8 @@ def apply_indicators(df):
     rs = avg_gain / avg_loss
 
     df["rsi"] = 100 - (100 / (1 + rs))
+
+    # ================= VOLUME =================
 
     df["vol_ma"] = df.volume.rolling(20).mean()
 
@@ -54,6 +61,8 @@ def check_signal(df):
     score = 0
     signal = None
 
+    # ================= TREND =================
+
     if regime == "bull" and last.close > last.ema20:
         signal = "long"
         score += 2
@@ -62,15 +71,23 @@ def check_signal(df):
         signal = "short"
         score += 2
 
+    # ================= RSI =================
+
     if last.rsi < 35:
         score += 1
 
     if last.rsi > 65:
         score += 1
 
+    # ================= VOLUME =================
+
     if last.volume > last.vol_ma:
         score += 1
 
-    atr = last.atr
+    # ================= ATR FILTER =================
+    # évite les marchés plats
 
-    return signal, score, atr
+    if last.atr < df.close.mean() * 0.001:
+        return None, 0
+
+    return signal, score
