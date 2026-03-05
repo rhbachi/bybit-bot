@@ -8,8 +8,7 @@ from strategy import apply_indicators, check_signal
 from portfolio import add_position, remove_position, get_positions, lowest_score
 from risk_engine import can_open_trade
 from notifier import send_telegram
-
-send_telegram("🚀 BOT V4 STARTED")
+send_telegram("🚀 BOT V4.3 STARTED")
 
 signals_cache = []
 
