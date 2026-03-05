@@ -1,7 +1,7 @@
 import time
 import threading
 import pandas as pd
-
+import math
 from config import *
 from flask import Flask, jsonify
 from notifier import send_telegram
@@ -61,6 +61,9 @@ def adjust_qty(symbol, qty):
 
     min_amount = market["limits"]["amount"]["min"]
     precision = market["precision"]["amount"]
+
+    if isinstance(precision, float):
+        precision = abs(int(round(-math.log10(precision))))
 
     qty = round(qty, precision)
 
