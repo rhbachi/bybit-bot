@@ -64,30 +64,41 @@ def adjust_qty(symbol, qty, price):
         qty = round(qty, precision)
 
         if qty < min_amount:
-            qty = min_amount
+
+            send_telegram(
+                f"⚠️ Qty too small\n\n{symbol}\nRequired: {min_amount}"
+            )
+
+            return None
 
         min_notional = 5
 
         if qty * price < min_notional:
-            qty = min_notional / price
-            qty = round(qty, precision)
+
+            send_telegram(
+                f"⚠️ Notional too small\n\n{symbol}"
+            )
+
+            return None
 
         return qty
 
     except Exception as e:
 
-        print("precision error", e)
+        send_telegram(f"⚠️ Precision error {symbol}\n{e}")
 
-        return qty
+        return None
 
 
 def open_trade(symbol, side, price, score):
+
+    def open_trade(symbol, side, price, score):
 
     qty = position_size(price)
 
     qty = adjust_qty(symbol, qty, price)
 
-    if qty <= 0:
+    if qty is None:
         return
 
     try:
@@ -127,7 +138,7 @@ Qty: {qty}
 
 def bot_loop():
 
-    send_telegram("🤖 BOT V4.3 STARTED")
+    send_telegram("🤖 BOT V4.3 STARTED - Trading engine online")
 
     while True:
 
