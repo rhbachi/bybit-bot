@@ -103,11 +103,10 @@ def fetch_signals_from_bots():
     all_signals.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     
     if all_signals:
-        print(f"   ✅ Utilisation des {len(all_signals)} signaux des bots", flush=True)
+        print(f"   OK - Utilisation des {len(all_signals)} signaux des bots", flush=True)
         return all_signals
     
-    print(f"   ⚠️ Aucun signal reçu - utilisation des données de test", flush=True)
-    return generate_test_signals()
+    return []
 
 def generate_test_signals():
     """Génère des signaux de test EN DERNIER RECOURS"""
@@ -216,16 +215,11 @@ def get_recent_signals():
     
     formatted_signals = []
     
-    for i, s in enumerate(signals[:limit]):
-        # Alternance simple
-        if i % 2 == 0:
-            detected_bot = 'ZONE2_AI'
-        else:
-            detected_bot = 'MULTI_SYMBOL'
-        
+    for s in signals[:limit]:
         formatted_signals.append({
             'timestamp': s.get('timestamp', datetime.now().isoformat()),
-            'bot': detected_bot,
+            'bot': s.get('bot', 'UNKNOWN'),
+            'symbol': s.get('symbol', 'UNKNOWN'),
             'signal': s.get('signal', 'none'),
             'price': s.get('price', 0),
             'strength': s.get('strength', '0/3'),
@@ -233,7 +227,6 @@ def get_recent_signals():
             'reason': s.get('reason', s.get('reason_not_executed', ''))
         })
     
-    print(f"📊 Alternance - {len(formatted_signals)} signaux affichés", flush=True)
     return jsonify(formatted_signals)
 
 @app.route('/api/check_balance')

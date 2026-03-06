@@ -399,6 +399,7 @@
                             <tr>
                                 <th>Heure</th>
                                 <th>Bot</th>
+                                <th>Symbole</th>
                                 <th>Signal</th>
                                 <th>Force</th>
                                 <th>Exec</th>
@@ -650,6 +651,7 @@
                         <tr>
                             <td>${new Date(s.timestamp).toLocaleTimeString()}</td>
                             <td><span class="badge-bot ${botClass}">${s.bot || 'unknown'}</span></td>
+                            <td><span style="font-weight: bold; color: #00d4aa;">${s.symbol || '-'}</span></td>
                             <td><span class="badge badge-${s.signal}">${s.signal || 'none'}</span></td>
                             <td>${s.strength}</td>
                             <td>${s.executed ? '✅' : '❌'}</td>

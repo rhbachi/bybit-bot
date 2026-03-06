@@ -248,12 +248,15 @@ def bot_loop():
                 }
                 logger.log_signal(signal_data)
                 
-                # Mise à jour du cache API
+                # Mise à jour du cache API (format harmonisé avec ZONE2_AI)
                 signals_cache.append({
-                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "timestamp": datetime.now().isoformat(),
+                    "bot": "MULTI_SYMBOL",
                     "symbol": symbol,
                     "signal": signal if signal else "none",
-                    "score": score,
+                    "price": price,
+                    "strength": f"{score}/3",
+                    "executed": executed,
                     "reason": reason
                 })
                 if len(signals_cache) > 100:
