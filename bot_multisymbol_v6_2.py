@@ -122,13 +122,11 @@ def open_trade(symbol, side, price, atr, score):
         return
 
     if side == "long":
-
         sl = price - atr * SL_ATR_MULTIPLIER
         tp = price + atr * TP_ATR_MULTIPLIER
         order_side = "buy"
 
     else:
-
         sl = price + atr * SL_ATR_MULTIPLIER
         tp = price - atr * TP_ATR_MULTIPLIER
         order_side = "sell"
@@ -138,9 +136,9 @@ def open_trade(symbol, side, price, atr, score):
     try:
 
         params = {
-            "stopLoss": round(sl, 2),
-            "takeProfit": round(tp, 2),
-            "trailingStop": round(trailing, 2)
+            "stopLossPrice": round(sl, 2),
+            "takeProfitPrice": round(tp, 2),
+            "trailingAmount": round(trailing, 2)
         }
 
         exchange.create_order(
@@ -175,7 +173,6 @@ Qty: {qty}
     except Exception as e:
 
         send_telegram(f"❌ Trade error {symbol}\n{e}")
-
 
 # ================= BOT LOOP =================
 
