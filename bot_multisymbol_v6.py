@@ -102,7 +102,10 @@ def margin_available(price, qty):
 
         balance = exchange.fetch_balance()
 
-        available = balance["USDT"]["free"]
+        available = balance.get("USDT", {}).get("free", 0)
+
+        if available is None:
+            available = 0
 
         required_margin = (qty * price) / LEVERAGE
 
