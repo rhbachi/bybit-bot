@@ -20,6 +20,13 @@ MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "2"))
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "300"))
 
 # =========================
+# ATR RISK MANAGEMENT
+# =========================
+
+SL_ATR_MULTIPLIER = float(os.getenv("SL_ATR_MULTIPLIER", "1.5"))
+TP_ATR_MULTIPLIER = float(os.getenv("TP_ATR_MULTIPLIER", "3.0"))
+
+# =========================
 # TRADING SETTINGS
 # =========================
 TIMEFRAME = os.getenv("TIMEFRAME", "5m")
