@@ -19,6 +19,7 @@ signals_cache = []
 app = Flask(__name__)
 
 last_trade_time = {}
+active_positions = {} # {symbol: trade_data}
 
 # ================= API =================
 
@@ -35,8 +36,20 @@ def status():
         "symbols": SYMBOLS,
         "threshold": SCORE_THRESHOLD,
         "capital": CAPITAL,
-        "leverage": LEVERAGE
+        "leverage": LEVERAGE,
+        "active_count": len(active_positions)
     })
+
+@app.route("/api/trades")
+def trades():
+    """Historique des trades récents"""
+    return jsonify(logger.get_recent_trades(50))
+
+@app.route("/api/positions")
+def positions():
+    """Positions actuellement ouvertes"""
+    # On rafraîchit la liste avec Bybit pour être sûr
+    return jsonify(list(active_positions.values()))
 
 def start_api():
     print(f"🌐 {BOT_NAME} API server started on port 5001")
@@ -113,6 +126,33 @@ def cooldown_ok(symbol):
     elapsed = time.time() - last_trade_time[symbol]
     return elapsed > COOLDOWN_SECONDS
 
+def has_open_position(symbol):
+    """Vérifie si une position est déjà ouverte pour ce symbole sur Bybit"""
+    try:
+        # On vérifie d'abord notre cache local pour la rapidité
+        if symbol in active_positions:
+            return True
+            
+        # Puis on vérifie réellement sur l'échange au cas où
+        pos = exchange.fetch_position(symbol)
+        if pos and float(pos.get('contracts', 0)) > 0:
+            # On en profite pour remettre à jour notre cache si besoin
+            active_positions[symbol] = {
+                "symbol": symbol,
+                "side": pos.get('side'),
+                "entry_price": pos.get('entryPrice'),
+                "qty": pos.get('contracts'),
+                "pnl_percent": pos.get('percentage'),
+                "pnl_usdt": pos.get('unrealizedPnl'),
+                "timestamp": datetime.now().isoformat()
+            }
+            return True
+        return False
+    except Exception as e:
+        logger.log_error(f"Error checking position for {symbol}", e)
+        # En cas d'erreur API, on préfère dire qu'il y a une position pour éviter les doublons
+        return True
+
 def set_trailing_stop(symbol, distance):
     """Active le trailing stop via un appel API séparé (Bybit V5)"""
     try:
@@ -137,6 +177,11 @@ def set_trailing_stop(symbol, distance):
 # ================= OPEN TRADE =================
 
 def open_trade(symbol, side, price, atr, score):
+    # Sécurité ultime : On ne rentre pas si déjà en position
+    if has_open_position(symbol):
+        print(f"🚫 {symbol} déjà en position, ouverture annulée.")
+        return
+
     qty = calculate_position_size(price, atr)
     if qty is None:
         return
@@ -183,7 +228,6 @@ def open_trade(symbol, side, price, atr, score):
 
         last_trade_time[symbol] = time.time()
         
-        # Log détaillé du trade
         trade_data = {
             'timestamp': datetime.now().isoformat(),
             'bot_name': BOT_NAME,
@@ -195,6 +239,15 @@ def open_trade(symbol, side, price, atr, score):
             'entry_atr_percent': (atr/price)
         }
         logger.log_trade_detailed(trade_data)
+        
+        # Ajouter à notre suivi local des positions actives
+        active_positions[symbol] = {
+            "symbol": symbol,
+            "side": side,
+            "entry_price": price,
+            "qty": qty,
+            "timestamp": datetime.now().isoformat()
+        }
 
         msg = f"🟢 TRADE OPEN {BOT_NAME}\n\nSymbol: {symbol}\nSide: {side.upper()}\nScore: {score}/3\nPrice: {price:.2f}\nSL: {sl:.2f}\nTP: {tp:.2f}\nQty: {qty}"
         send_telegram(msg)
@@ -269,6 +322,14 @@ def bot_loop():
                 logger.log_error(f"Loop error on {symbol}", e)
                 time.sleep(10)
 
+        # Nettoyage périodique du cache des positions actives (pour les sorties)
+        try:
+            for s in list(active_positions.keys()):
+                if not has_open_position(s):
+                    del active_positions[s]
+        except:
+            pass
+            
         # Pause entre les cycles
         time.sleep(60)
 

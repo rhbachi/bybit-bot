@@ -144,13 +144,43 @@ def index():
 @app.route('/api/overview')
 @requires_auth
 def get_overview():
-    """API - Vue d'ensemble"""
-    risk_metrics = trade_analyzer.get_risk_metrics()
-    signal_stats = signal_analyzer.get_signal_stats()
+    """API - Vue d'ensemble agrégée des bots"""
+    all_metrics = {
+        'total_pnl_usdt': 0,
+        'total_trades': 0,
+        'win_rate': 0,
+        'profit_factor': 0,
+        'sharpe_ratio': 0,
+        'max_drawdown_pct': 0
+    }
     
+    total_executed_signals = 0
+    total_signals_count = 0
+    
+    for bot in BOTS:
+        try:
+            # Status pour les métriques de base
+            response = requests.get(bot['url'].replace('/signals', '/status'), timeout=2)
+            if response.status_code == 200:
+                status = response.json()
+                all_metrics['total_pnl_usdt'] += status.get('daily_pnl', 0)
+                
+            # Signaux pour le taux d'exécution
+            sig_response = requests.get(bot['url'], timeout=2)
+            if sig_response.status_code == 200:
+                signals = sig_response.json()
+                total_signals_count += len(signals)
+                total_executed_signals += sum(1 for s in signals if s.get('executed'))
+        except:
+            pass
+            
     return jsonify({
-        'risk_metrics': risk_metrics,
-        'signal_stats': signal_stats,
+        'risk_metrics': all_metrics,
+        'signal_stats': {
+            'total_signals': total_signals_count,
+            'executed_signals': total_executed_signals,
+            'execution_rate': round(total_executed_signals / total_signals_count * 100, 2) if total_signals_count > 0 else 0
+        },
         'last_update': datetime.now().isoformat()
     })
 
@@ -204,8 +234,23 @@ def get_parameters():
 @app.route('/api/recent_trades')
 @requires_auth
 def get_recent_trades():
-    """API - Trades récents"""
-    return jsonify([])
+    """API - Trades récents agrégés"""
+    all_trades = []
+    for bot in BOTS:
+        try:
+            response = requests.get(bot['url'].replace('/signals', '/trades'), timeout=2)
+            if response.status_code == 200:
+                trades = response.json()
+                # Marquer l'origine si pas présent
+                for t in trades:
+                    if 'bot_name' not in t: t['bot_name'] = bot['name']
+                all_trades.extend(trades)
+        except:
+            pass
+            
+    # Trier par date décroissante
+    all_trades.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    return jsonify(all_trades[:50])
 
 @app.route('/api/recent_signals')
 @requires_auth
@@ -293,20 +338,27 @@ def analyze_bots():
 @app.route('/api/current_positions')
 @requires_auth
 def get_current_positions():
-    """API - Positions actuelles"""
-    try:
-        return jsonify({
-            'positions': [],
-            'total_pnl': 0,
-            'timestamp': datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({
-            'positions': [],
-            'total_pnl': 0,
-            'timestamp': datetime.now().isoformat(),
-            'error': str(e)
-        })
+    """API - Positions actuelles agrégées"""
+    all_positions = []
+    total_pnl = 0
+    
+    for bot in BOTS:
+        try:
+            response = requests.get(bot['url'].replace('/signals', '/positions'), timeout=2)
+            if response.status_code == 200:
+                positions = response.json()
+                for p in positions:
+                    if 'bot' not in p: p['bot'] = bot['name']
+                    all_positions.append(p)
+                    total_pnl += p.get('pnl_usdt', 0)
+        except:
+            pass
+            
+    return jsonify({
+        'positions': all_positions,
+        'total_pnl': round(total_pnl, 2),
+        'timestamp': datetime.now().isoformat()
+    })
 
 @app.route('/api/best_trades')
 @requires_auth

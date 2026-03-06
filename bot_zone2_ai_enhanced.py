@@ -47,6 +47,37 @@ def get_signals():
         print(f"FAILED - API signals: {e}", flush=True)
         return jsonify([])
 
+@api_app.route('/api/trades')
+def get_trades_api():
+    """Retreive recent trades from the log file"""
+    try:
+        trades = enhanced_logger.get_recent_trades(50)
+        return jsonify(trades)
+    except Exception as e:
+        print(f"FAILED - API trades: {e}", flush=True)
+        return jsonify([])
+
+@api_app.route('/api/positions')
+def get_positions_api():
+    """Return current active position if any"""
+    try:
+        if in_position:
+            # Format to match what the dashboard expects
+            pos_data = [{
+                'symbol': SYMBOL,
+                'side': current_trade['side'],
+                'entry_price': current_trade['entry_price'],
+                'current_price': current_trade.get('last_price', current_trade['entry_price']),
+                'sl_price': current_trade['sl_price'],
+                'tp_price': current_trade['tp_price'],
+                'timestamp': current_trade['entry_time'].isoformat() if hasattr(current_trade['entry_time'], 'isoformat') else str(current_trade['entry_time'])
+            }]
+            return jsonify(pos_data)
+        return jsonify([])
+    except Exception as e:
+        print(f"FAILED - API positions: {e}", flush=True)
+        return jsonify([])
+
 def run_api():
     """Lance l'API Flask dans un thread séparé"""
     try:
@@ -161,14 +192,16 @@ def get_status():
     """Retourne l'etat du bot"""
     try:
         from config import exchange, SYMBOL, CAPITAL, LEVERAGE, PAPER_TRADING
-        # Balance simplifiee pour eviter les erreurs de timeout
         return jsonify({
             'bot': 'ZONE2_AI',
             'symbol': SYMBOL,
             'paper_mode': PAPER_TRADING,
             'capital': CAPITAL,
             'leverage': LEVERAGE,
-            'status': 'running'
+            'status': 'running',
+            'in_position': in_position,
+            'daily_pnl': daily_pnl,
+            'consecutive_losses': consecutive_losses
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -440,6 +473,7 @@ def run():
             
             elif in_position:
                 current_price = df_with_indicators['close'].iloc[-1]
+                current_trade['last_price'] = current_price # Update for API
                 
                 new_sl = update_trailing_stop(
                     SYMBOL,
