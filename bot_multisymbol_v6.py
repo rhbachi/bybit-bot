@@ -24,7 +24,7 @@ def start_api():
 
 
 # ================================
-# FETCH DATA
+# FETCH MARKET DATA
 # ================================
 
 def fetch_data(symbol):
@@ -33,14 +33,14 @@ def fetch_data(symbol):
 
     df = pd.DataFrame(
         ohlcv,
-        columns=["time","open","high","low","close","volume"]
+        columns=["time", "open", "high", "low", "close", "volume"]
     )
 
     return df
 
 
 # ================================
-# ATR POSITION SIZING
+# ATR POSITION SIZE
 # ================================
 
 def position_size(price, atr):
@@ -56,8 +56,8 @@ def position_size(price, atr):
 
     qty = qty * LEVERAGE
 
-    # limite max position (protection)
-    max_position_value = CAPITAL * LEVERAGE * 0.2
+    # cap position size (safety)
+    max_position_value = CAPITAL * LEVERAGE * 0.25
     max_qty = max_position_value / price
 
     if qty > max_qty:
@@ -67,7 +67,7 @@ def position_size(price, atr):
 
 
 # ================================
-# PRECISION ENGINE
+# BYBIT PRECISION ENGINE
 # ================================
 
 def adjust_qty(symbol, qty, price):
@@ -87,7 +87,7 @@ def adjust_qty(symbol, qty, price):
         if qty < min_amount:
             return None
 
-        # check notional
+        # minimum notional
         if qty * price < 5:
             return None
 
@@ -97,44 +97,6 @@ def adjust_qty(symbol, qty, price):
 
         send_telegram(f"⚠️ Precision error {symbol}\n{e}")
         return None
-
-
-# ================================
-# MARGIN CHECK
-# ================================
-
-def margin_available(price, qty):
-
-    try:
-
-        balance = exchange.fetch_balance()
-
-        # récupération correcte pour Bybit futures
-        available = balance.get("free", {}).get("USDT", 0)
-
-        if available is None:
-            available = 0
-
-        required_margin = (qty * price) / LEVERAGE
-
-        if required_margin > available:
-
-            send_telegram(
-f"""⚠️ Not enough margin
-
-Required: {round(required_margin,2)}
-Available: {round(available,2)}
-"""
-            )
-
-            return False
-
-        return True
-
-    except Exception as e:
-
-        send_telegram(f"⚠️ Balance check error\n{e}")
-        return False
 
 
 # ================================
@@ -153,9 +115,6 @@ def open_trade(symbol, side, price, atr, score):
     if qty is None:
         return
 
-    if not margin_available(price, qty):
-        return
-
     try:
 
         exchange.create_order(
@@ -167,13 +126,14 @@ def open_trade(symbol, side, price, atr, score):
 
         send_telegram(
 f"""
-📈 TRADE OPEN V6.1
+📈 TRADE OPEN V6
 
 Symbol: {symbol}
 Side: {side}
-Score: {score}
 
+Score: {score}
 ATR: {round(atr,4)}
+
 Qty: {qty}
 """
         )
@@ -189,7 +149,7 @@ Qty: {qty}
 
 def bot_loop():
 
-    send_telegram("🚀 BOT V6.1 STARTED")
+    send_telegram("🚀 BOT V6 STARTED")
 
     while True:
 
