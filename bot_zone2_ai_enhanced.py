@@ -25,8 +25,8 @@ def health():
 def get_signals():
     """Endpoint pour le dashboard - retourne les 50 derniers signaux"""
     try:
-        if os.path.exists('/app/logs/signals_log.csv'):
-            df = pd.read_csv('/app/logs/signals_log.csv')
+        if os.path.exists('logs/signals_log.csv'):
+            df = pd.read_csv('logs/signals_log.csv')
             df = df.tail(50)
             signals = df.to_dict('records')
             
@@ -44,21 +44,21 @@ def get_signals():
             return jsonify(formatted_signals)
         return jsonify([])
     except Exception as e:
-        print(f"❌ Erreur API signals: {e}", flush=True)
+        print(f"FAILED - API signals: {e}", flush=True)
         return jsonify([])
 
 def run_api():
     """Lance l'API Flask dans un thread séparé"""
     try:
-        print("🚀 API dashboard démarrée sur le port 5001", flush=True)
+        print("API dashboard demarree sur le port 5001", flush=True)
         api_app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
     except Exception as e:
-        print(f"❌ Erreur démarrage API: {e}", flush=True)
+        print(f"FAILED - demarrage API: {e}", flush=True)
         time.sleep(5)
         threading.Thread(target=run_api, daemon=True).start()
 
 # LANCER L'API IMMÉDIATEMENT
-print("🔄 Lancement de l'API dashboard...", flush=True)
+print("START - Lancement de l'API dashboard...", flush=True)
 threading.Thread(target=run_api, daemon=True).start()
 time.sleep(1)  # Petit délai pour laisser l'API démarrer
 
@@ -244,14 +244,14 @@ def check_circuit_breaker():
     daily_loss_pct = (initial_capital - current_balance) / initial_capital * 100 if initial_capital > 0 else 0
     
     if daily_loss_pct > MAX_DAILY_LOSS_PCT and daily_loss_pct < 100:
-        msg = f"🚨 CIRCUIT BREAKER: Perte journalière {daily_loss_pct:.1f}% > {MAX_DAILY_LOSS_PCT}%"
+        msg = f"CIRCUIT BREAKER: Perte journaliere {daily_loss_pct:.1f}% > {MAX_DAILY_LOSS_PCT}%"
         print(msg, flush=True)
         send_telegram(msg)
         enhanced_logger.log_error(msg)
         return True, f"Daily loss: {daily_loss_pct:.1f}%"
     
     if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
-        msg = f"🚨 CIRCUIT BREAKER: {consecutive_losses} pertes consécutives"
+        msg = f"CIRCUIT BREAKER: {consecutive_losses} pertes consecutives"
         print(msg, flush=True)
         send_telegram(msg)
         enhanced_logger.log_error(msg)
@@ -272,8 +272,8 @@ def check_signal_with_logging(df):
     if signal:
         fvg_ok = validate_fvg_confluence(df_with_indicators, signal)
         if not fvg_ok:
-            reason_not_executed = "Rejeté - Pas de confluence FVG"
-            print(f"❌ Signal AI ({signal}) rejeté - pas de confluence FVG", flush=True)
+            reason_not_executed = "Rejete - Pas de confluence FVG"
+            print(f"SIGNAL AI ({signal}) rejete - pas de confluence FVG", flush=True)
             signal = None
     else:
         reason_not_executed = "Pas de signal AI"
@@ -438,12 +438,12 @@ def run():
                             if not PAPER_TRADING:
                                 close_side = "sell" if signal == "long" else "buy"
                                 exchange.create_market_order(SYMBOL, close_side, qty, params={'reduceOnly': True})
-                            print("🚨 Position fermée (SL/TP failed)", flush=True)
-                            enhanced_logger.log_error("SL/TP failed - position fermée")
+                            print("ALERT - Position fermee (SL/TP failed)", flush=True)
+                            enhanced_logger.log_error("SL/TP failed - position fermee")
                 
                 except Exception as e:
                     enhanced_logger.log_error("Erreur execution ordre", e)
-                    print(f"❌ Erreur execution: {e}", flush=True)
+                    print(f"FAILED - Erreur execution: {e}", flush=True)
             
             elif in_position:
                 current_price = df_with_indicators['close'].iloc[-1]
@@ -482,12 +482,12 @@ def run():
                         position_closed = pos and float(pos.get("contracts", 0)) == 0
                         exit_reason = "SL/TP" if position_closed else None
                     except Exception as e:
-                        enhanced_logger.log_error("Erreur vérification position", e)
+                        enhanced_logger.log_error("Erreur verification position", e)
                         position_closed = False
                         exit_reason = None
                 
                 if position_closed:
-                    print(f"🔔 Position fermée par {exit_reason}", flush=True)
+                    print(f"NOTIF - Position fermee par {exit_reason}", flush=True)
                     
                     if current_trade['side'] == 'long':
                         pnl_pct = (current_price - current_trade['entry_price']) / current_trade['entry_price'] * 100
@@ -547,12 +547,12 @@ def run():
                     
                     duration = (datetime.now(timezone.utc) - current_trade['entry_time']).seconds
                     msg = (
-                        f"{'🟢 WIN' if pnl_pct>0 else '🔴 LOSS'} - TRADE FERMÉ\n"
+                        f"{'WIN' if pnl_pct>0 else 'LOSS'} - TRADE FERME\n"
                         f"Direction: {current_trade['side'].upper()}\n"
-                        f"Entrée: {current_trade['entry_price']:.2f}\n"
+                        f"Entree: {current_trade['entry_price']:.2f}\n"
                         f"Sortie: {current_price:.2f}\n"
                         f"P&L: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)\n"
-                        f"Durée: {duration}s\n"
+                        f"Duree: {duration}s\n"
                         f"Raison: {exit_reason}"
                     )
                     send_telegram(msg)
@@ -574,8 +574,8 @@ def run():
             
         except Exception as e:
             enhanced_logger.log_error("Erreur loop principale", e)
-            print(f"❌ Erreur loop: {e}", flush=True)
-            send_telegram(f"❌ Erreur: {e}")
+            print(f"FAILED - Erreur loop: {e}", flush=True)
+            send_telegram(f"FAILED - Erreur: {e}")
             time.sleep(60)
 
 if __name__ == "__main__":
