@@ -260,17 +260,25 @@ def check_circuit_breaker():
     return False, "OK"
 
 def check_signal_with_logging(df):
-    """Wrapper pour logger tous les signaux"""
+    """Wrapper pour logger tous les signaux avec filtres de confluence"""
     from strategy_ai_enhanced import debug_check_signal, detect_trend, get_state, calculate_signal_strength
-    # === FVG Institutional Confluence Filter ===
-if signal:
-    fvg_ok = validate_fvg_confluence(df_with_indicators, signal)
-    if not fvg_ok:
-        print("❌ Signal AI rejeté - pas de confluence FVG", flush=True)
-        signal = None
+    
+    # 1. Calculer les indicateurs et le signal AI de base
     df_with_indicators = apply_indicators(df)
     signal = debug_check_signal(df_with_indicators)
     
+    # 2. Appliquer le filtre de confluence FVG Institutional si un signal AI est présent
+    reason_not_executed = ""
+    if signal:
+        fvg_ok = validate_fvg_confluence(df_with_indicators, signal)
+        if not fvg_ok:
+            reason_not_executed = "Rejeté - Pas de confluence FVG"
+            print(f"❌ Signal AI ({signal}) rejeté - pas de confluence FVG", flush=True)
+            signal = None
+    else:
+        reason_not_executed = "Pas de signal AI"
+    
+    # 3. Logging détaillé pour le dashboard
     last_row = df_with_indicators.iloc[-1] if not df_with_indicators.empty else None
     
     if last_row is not None:
@@ -293,8 +301,8 @@ if signal:
             'ote_zone': get_state().get('ote_active', False),
             'bios_detected': get_state().get('bios_level') is not None,
             'signal_strength': calculate_signal_strength(df_with_indicators, signal) if signal else 0,
-            'executed': False if not signal else False,
-            'reason_not_executed': 'Signal non exécuté' if not signal else ''
+            'executed': True if signal else False,
+            'reason_not_executed': reason_not_executed if not signal else ''
         }
         
         enhanced_logger.log_signal(signal_data)
