@@ -56,6 +56,13 @@ def position_size(price, atr):
 
     qty = qty * LEVERAGE
 
+    # limite max position (protection)
+    max_position_value = CAPITAL * LEVERAGE * 0.2
+    max_qty = max_position_value / price
+
+    if qty > max_qty:
+        qty = max_qty
+
     return qty
 
 
@@ -102,7 +109,8 @@ def margin_available(price, qty):
 
         balance = exchange.fetch_balance()
 
-        available = balance.get("USDT", {}).get("free", 0)
+        # récupération correcte pour Bybit futures
+        available = balance.get("free", {}).get("USDT", 0)
 
         if available is None:
             available = 0
