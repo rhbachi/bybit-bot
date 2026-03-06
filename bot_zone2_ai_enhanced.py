@@ -57,14 +57,7 @@ def run_api():
         time.sleep(5)
         threading.Thread(target=run_api, daemon=True).start()
 
-# LANCER L'API IMMÉDIATEMENT
-print("START - Lancement de l'API dashboard...", flush=True)
-threading.Thread(target=run_api, daemon=True).start()
-time.sleep(1)  # Petit délai pour laisser l'API démarrer
-
-# =========================
 # IMPORTS DU BOT
-# =========================
 from config import exchange, SYMBOL, CAPITAL, LEVERAGE
 from risk_improved import calculate_position_size
 from notifier import send_telegram
@@ -165,17 +158,17 @@ def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
 
 @api_app.route('/api/status')
 def get_status():
-    """Retourne l'état du bot"""
+    """Retourne l'etat du bot"""
     try:
         from config import exchange, SYMBOL, CAPITAL, LEVERAGE, PAPER_TRADING
-        balance = exchange.fetch_balance()
+        # Balance simplifiee pour eviter les erreurs de timeout
         return jsonify({
-            'bot': 'MULTI_SYMBOL',  # ou ZONE2_AI
+            'bot': 'ZONE2_AI',
+            'symbol': SYMBOL,
             'paper_mode': PAPER_TRADING,
-            'balance_usdt': balance['USDT']['free'],
+            'capital': CAPITAL,
             'leverage': LEVERAGE,
-            'symbols': SYMBOLS if hasattr(self, 'SYMBOLS') else [SYMBOL],
-            'positions_open': len(positions) if 'positions' in locals() else 0
+            'status': 'running'
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -547,7 +540,7 @@ def run():
                     
                     duration = (datetime.now(timezone.utc) - current_trade['entry_time']).seconds
                     msg = (
-                        f"{'WIN' if pnl_pct>0 else 'LOSS'} - TRADE FERME\n"
+                        f"WIN - TRADE FERME\n" if pnl_pct>0 else "LOSS - TRADE FERME\n"
                         f"Direction: {current_trade['side'].upper()}\n"
                         f"Entree: {current_trade['entry_price']:.2f}\n"
                         f"Sortie: {current_price:.2f}\n"
@@ -579,4 +572,9 @@ def run():
             time.sleep(60)
 
 if __name__ == "__main__":
+    # LANCER L'API ICI (APRES TOUTES LES ROUTES)
+    print("START - Lancement de l'API dashboard...", flush=True)
+    threading.Thread(target=run_api, daemon=True).start()
+    time.sleep(1)
+    
     run()
