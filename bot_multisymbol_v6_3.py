@@ -9,7 +9,7 @@ from datetime import datetime
 from config import *
 from flask import Flask, jsonify
 from notifier import send_telegram
-from strategy_v6 import apply_indicators, check_signal
+from strategy_v7_robust import apply_indicators, check_signal
 from logger_enhanced import get_logger
 
 # ================= CONFIGURATION =================
