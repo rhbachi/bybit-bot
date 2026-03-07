@@ -145,26 +145,23 @@ def calculate_bollinger_bands(df, period=20, std_dev=2):
 
 def detect_bios(df):
     """
-    Détecte Break of Structure (BIOS) - VERSION ASSOUPLIE POUR TEST
-    Seuil réduit à 0.2% pour voir plus de signaux
+    Détecte Break of Structure (BIOS) - Logique corrigée
     """
     if len(df) < 20:
         return None
     
-    # Détection swing points sur 3 périodes (au lieu de 5)
-    highs = df['high'].rolling(window=3, center=True).max()
-    lows = df['low'].rolling(window=3, center=True).min()
-    
-    last_high = highs.iloc[-2]  # Éviter la bougie actuelle
-    last_low = lows.iloc[-2]
+    # On cherche les plus hauts/bas sur les bougies PRECEDENTES (période -10 à -2)
+    # pour exclure la bougie actuelle et comparer correctement son Close
+    past_high = df['high'].iloc[-10:-1].max()
+    past_low = df['low'].iloc[-10:-1].min()
     current_close = df['close'].iloc[-1]
     
-    # Seuil plus bas : 0.2% au lieu d'un vrai dépassement
-    if current_close > last_high * 1.002:  # 0.2% au-dessus
-        return {'direction': 'bullish', 'level': last_high}
+    # Dépassement léger pour confirmer la cassure (0.05%) au lieu de l'impossible 0.2%
+    if current_close > past_high * 1.0005:
+        return {'direction': 'bullish', 'level': past_high}
     
-    if current_close < last_low * 0.998:  # 0.2% en-dessous
-        return {'direction': 'bearish', 'level': last_low}
+    if current_close < past_low * 0.9995:
+        return {'direction': 'bearish', 'level': past_low}
     
     return None
 
@@ -309,25 +306,20 @@ def apply_indicators(df):
 
 def detect_trend(df):
     """
-    Détecte la tendance principale avec EMA 20/50
+    Détecte la tendance principale avec EMA 20/50 sans contrainte de pente trop forte
     """
     last = df.iloc[-1]
     
     if pd.isna(last['ema20']) or pd.isna(last['ema50']):
         return None
     
-    # Golden Cross (haussier)
+    # Tendance haussière (Golden Cross / Alignement)
     if last['ema20'] > last['ema50'] and last['close'] > last['ema20']:
-        # Vérifier pente positive
-        ema_slope = (last['ema20'] - df['ema20'].iloc[-5]) / df['ema20'].iloc[-5]
-        if ema_slope > 0.0001:
-            return 'bullish'
+        return 'bullish'
     
-    # Death Cross (baissier)
+    # Tendance baissière (Death Cross / Alignement)
     if last['ema20'] < last['ema50'] and last['close'] < last['ema20']:
-        ema_slope = (last['ema20'] - df['ema20'].iloc[-5]) / df['ema20'].iloc[-5]
-        if ema_slope < -0.0001:
-            return 'bearish'
+        return 'bearish'
     
     return None
 
