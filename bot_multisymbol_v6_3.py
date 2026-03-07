@@ -9,7 +9,9 @@ from datetime import datetime
 from config import *
 from flask import Flask, jsonify
 from notifier import send_telegram
-from strategy_v7_robust import apply_indicators, check_signal
+from strategy_v7_robust import apply_indicators as apply_v7, check_signal as check_v7
+from strategy_v6 import apply_indicators as apply_v6, check_signal as check_v6
+from auto_tuner import AutoTuner
 from logger_enhanced import get_logger
 
 # ================= CONFIGURATION =================
@@ -21,6 +23,13 @@ app = Flask(__name__)
 
 last_trade_time = {}
 active_positions = {} # {symbol: trade_data}
+
+# Active Strategy Settings
+ACTIVE_STRATEGY = 'v7_robust'
+CURRENT_SL_MULTI = SL_ATR_MULTIPLIER
+CURRENT_TP_MULTI = TP_ATR_MULTIPLIER
+CURRENT_THRESHOLD = SCORE_THRESHOLD
+LAST_TUNE_TRADES = 0
 
 # Performance stats
 daily_pnl = 0.0
@@ -81,7 +90,10 @@ def status():
     return jsonify({
         "bot": BOT_NAME,
         "symbols": SYMBOLS,
-        "threshold": SCORE_THRESHOLD,
+        "active_strategy": ACTIVE_STRATEGY,
+        "threshold": CURRENT_THRESHOLD,
+        "sl_multi": CURRENT_SL_MULTI,
+        "tp_multi": CURRENT_TP_MULTI,
         "capital": CAPITAL,
         "leverage": LEVERAGE,
         "active_count": len(active_positions),
@@ -128,7 +140,7 @@ def calculate_position_size(price, atr):
         return None
         
     risk_amount = CAPITAL * RISK_PER_TRADE
-    stop_distance = atr * SL_ATR_MULTIPLIER
+    stop_distance = atr * CURRENT_SL_MULTI
     
     qty = (risk_amount / stop_distance) * LEVERAGE
     
@@ -298,12 +310,12 @@ def open_trade(symbol, side, price, atr, score):
         return
 
     if side == "long":
-        sl = price - atr * SL_ATR_MULTIPLIER
-        tp = price + atr * TP_ATR_MULTIPLIER
+        sl = price - atr * CURRENT_SL_MULTI
+        tp = price + atr * CURRENT_TP_MULTI
         order_side = "buy"
     else:
-        sl = price + atr * SL_ATR_MULTIPLIER
-        tp = price - atr * TP_ATR_MULTIPLIER
+        sl = price + atr * CURRENT_SL_MULTI
+        tp = price - atr * CURRENT_TP_MULTI
         order_side = "sell"
 
     # Calcul de la distance du trailing stop (ex: 50% de l'ATR)
@@ -369,8 +381,13 @@ def open_trade(symbol, side, price, atr, score):
 # ================= BOT LOOP =================
 
 def bot_loop():
-    global daily_pnl, consecutive_losses, last_state_save
-    send_telegram(f"🚀 {BOT_NAME} STARTED\nSymbols: {len(SYMBOLS)}\nThreshold: {SCORE_THRESHOLD}")
+    global daily_pnl, consecutive_losses, last_state_save, total_trades, LAST_TUNE_TRADES
+    global ACTIVE_STRATEGY, CURRENT_SL_MULTI, CURRENT_TP_MULTI, CURRENT_THRESHOLD
+    
+    tuner = AutoTuner(exchange, logger)
+    LAST_TUNE_TRADES = total_trades
+    
+    send_telegram(f"🚀 {BOT_NAME} STARTED\nSymbols: {len(SYMBOLS)}\nThreshold: {CURRENT_THRESHOLD}")
     print(f"🤖 {BOT_NAME} Monitoring {SYMBOLS}")
 
     while True:
@@ -383,18 +400,22 @@ def bot_loop():
                 if df.empty:
                     continue
 
-                df = apply_indicators(df)
-                signal, score, atr = check_signal(df)
+                if ACTIVE_STRATEGY == 'v6_aggressive':
+                    df = apply_v6(df)
+                    signal, score, atr = check_v6(df)
+                else: # Default robust
+                    df = apply_v7(df)
+                    signal, score, atr = check_v7(df)
                 
                 price = df.close.iloc[-1]
                 reason = ""
                 
                 if signal:
-                    if score >= SCORE_THRESHOLD:
+                    if score >= CURRENT_THRESHOLD:
                         open_trade(symbol, signal, price, atr, score)
                         executed = True
                     else:
-                        reason = f"Score insuffisant ({score}/{SCORE_THRESHOLD})"
+                        reason = f"Score insuffisant ({score}/{CURRENT_THRESHOLD})"
                         executed = False
                 else:
                     reason = "Pas de signal EMA"
@@ -435,6 +456,39 @@ def bot_loop():
             except Exception as e:
                 logger.log_error(f"Loop error on {symbol}", e)
                 time.sleep(10)
+
+        # ================= AUTO-TUNING =================
+        try:
+            # Trigger Auto-Tuner every 10 trades
+            if total_trades > 0 and total_trades - LAST_TUNE_TRADES >= 10:
+                print("🔄 Lancement de l'Auto-Tuner...", flush=True)
+                # On utilise BTC par défaut comme indicateur de marché général
+                best_config = tuner.get_best_configuration(SYMBOLS[0], TIMEFRAME)
+                
+                if best_config:
+                    new_strat = best_config['strategy']
+                    p = best_config['params']
+                    
+                    # Log & Update if changed
+                    if new_strat != ACTIVE_STRATEGY or p['sl_multi'] != CURRENT_SL_MULTI or p['threshold'] != CURRENT_THRESHOLD:
+                        ACTIVE_STRATEGY = new_strat
+                        CURRENT_SL_MULTI = p['sl_multi']
+                        CURRENT_TP_MULTI = p['tp_multi']
+                        CURRENT_THRESHOLD = p['threshold']
+                        
+                        msg = (f"🔄 AUTO-TUNER ACTIF 🔄\n"
+                               f"Nouvelle Strat: {ACTIVE_STRATEGY}\n"
+                               f"SL Multi: {CURRENT_SL_MULTI}x\n"
+                               f"TP Multi: {CURRENT_TP_MULTI}x\n"
+                               f"Threshold: {CURRENT_THRESHOLD}\n"
+                               f"Expected WinRate: {best_config['expected_wr']:.1f}%\n"
+                               f"Expected PnL: {best_config['expected_pnl']:.2f} ATR")
+                        print(msg, flush=True)
+                        send_telegram(msg)
+                
+                LAST_TUNE_TRADES = total_trades
+        except Exception as e:
+            logger.log_error("Auto-tuner error", e)
 
         # Nettoyage périodique du cache des positions actives (vérification réelle sur Bybit)
         try:
