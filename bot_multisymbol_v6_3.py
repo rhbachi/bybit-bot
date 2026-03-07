@@ -254,22 +254,27 @@ def handle_position_closed(symbol):
     except Exception as e:
         logger.log_error(f"Error handling closed position for {symbol}", e)
 
-def set_trailing_stop(symbol, distance):
+def set_trailing_stop(symbol, distance, activation_price=None):
     """Active le trailing stop via un appel API séparé (Bybit V5)"""
     try:
         # Attendre un court instant que la position soit enregistrée par Bybit
         time.sleep(1.5)
         
-        # Formatage du symbole pour l'appel privé (Bybit attend souvent ETHUSDT sans /)
+        # Formatage du symbole pour l'appel privé
         clean_symbol = symbol.split(':')[0].replace('/', '')
         
-        exchange.private_post_v5_position_trading_stop({
+        params = {
             "category": "linear",
             "symbol": clean_symbol,
             "trailingStop": str(round(distance, 4)),
             "positionIdx": 0
-        })
-        print(f"📈 Trailing Stop activé pour {symbol} (distance: {round(distance, 2)})")
+        }
+        
+        if activation_price:
+            params["activePrice"] = str(round(activation_price, 4))
+            print(f"📈 Trailing Stop configuré pour {symbol} (activation: {round(activation_price, 2)})")
+        
+        exchange.private_post_v5_position_trading_stop(params)
         return True
     except Exception as e:
         logger.log_error(f"Trailing Stop Error {symbol}", e)
@@ -303,6 +308,8 @@ def open_trade(symbol, side, price, atr, score):
 
     # Calcul de la distance du trailing stop (ex: 50% de l'ATR)
     trailing_distance = atr * 0.5
+    # Prix d'activation : quand on a déjà gagné 0.5 ATR
+    activation_price = price + (atr * 0.5) if side == "long" else price - (atr * 0.5)
 
     try:
         # Configuration SL/TP optimisée pour Bybit V5 (Linear)
@@ -324,8 +331,8 @@ def open_trade(symbol, side, price, atr, score):
             params
         )
 
-        # Activer le Trailing Stop dans un second temps (plus fiable sur Bybit)
-        set_trailing_stop(symbol, trailing_distance)
+        # Activer le Trailing Stop avec prix d'activation
+        set_trailing_stop(symbol, trailing_distance, activation_price)
 
         last_trade_time[symbol] = time.time()
         

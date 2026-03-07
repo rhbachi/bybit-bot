@@ -252,7 +252,7 @@ def get_status():
         return jsonify({'error': str(e)}), 500
 
 def update_trailing_stop(symbol, side, qty, current_price, current_sl):
-    """Met à jour le trailing stop pour un symbole spécifique"""
+    """Met à jour le trailing stop avec sécurisation du prix d'entrée (Break-even)"""
     if PAPER_TRADING:
         return current_sl
     
@@ -260,16 +260,24 @@ def update_trailing_stop(symbol, side, qty, current_price, current_sl):
     if not trade:
         return current_sl
 
+    entry_price = trade['entry_price']
+
     if side == 'long':
         if current_price > trade['highest_price']:
             trade['highest_price'] = current_price
             
-        gain_pct = (current_price - trade['entry_price']) / trade['entry_price']
+        gain_pct = (current_price - entry_price) / entry_price
         
         if gain_pct > TRAILING_STOP_ACTIVATION:
-            new_sl = current_price * (1 - TRAILING_STOP_DISTANCE)
+            # calcul du nouveau SL théorique
+            theoretical_sl = current_price * (1 - TRAILING_STOP_DISTANCE)
+            
+            # Étape 1 : Si on vient d'activer, on place d'abord à Break-Even (entrée + tiny profit)
+            # Étape 2 : On ne suit le prix que si le nouveau SL est > prix d'entrée
+            new_sl = max(theoretical_sl, entry_price * 1.001)
+            
             if new_sl > current_sl:
-                print(f"📈 [{symbol}] Trailing stop: {current_sl:.2f} → {new_sl:.2f}", flush=True)
+                print(f"📈 [{symbol}] Trailing stop: {current_sl:.2f} → {new_sl:.2f} (Profit sécurisé)", flush=True)
                 try:
                     exchange.private_post_v5_position_trading_stop({
                         'category': 'linear',
@@ -286,12 +294,15 @@ def update_trailing_stop(symbol, side, qty, current_price, current_sl):
         if current_price < trade['lowest_price']:
             trade['lowest_price'] = current_price
             
-        gain_pct = (trade['entry_price'] - current_price) / trade['entry_price']
+        gain_pct = (entry_price - current_price) / entry_price
         
         if gain_pct > TRAILING_STOP_ACTIVATION:
-            new_sl = current_price * (1 + TRAILING_STOP_DISTANCE)
+            theoretical_sl = current_price * (1 + TRAILING_STOP_DISTANCE)
+            # Break-even pour Short
+            new_sl = min(theoretical_sl, entry_price * 0.999)
+            
             if new_sl < current_sl:
-                print(f"📈 [{symbol}] Trailing stop: {current_sl:.2f} → {new_sl:.2f}", flush=True)
+                print(f"📈 [{symbol}] Trailing stop: {current_sl:.2f} → {new_sl:.2f} (Profit sécurisé)", flush=True)
                 try:
                     exchange.private_post_v5_position_trading_stop({
                         'category': 'linear',
