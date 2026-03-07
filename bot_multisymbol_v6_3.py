@@ -126,16 +126,18 @@ def cooldown_ok(symbol):
     elapsed = time.time() - last_trade_time[symbol]
     return elapsed > COOLDOWN_SECONDS
 
-def has_open_position(symbol):
+def has_open_position(symbol, ignore_cache=False):
     """Vérifie si une position est déjà ouverte pour ce symbole sur Bybit"""
     try:
         # On vérifie d'abord notre cache local pour la rapidité
-        if symbol in active_positions:
+        if not ignore_cache and symbol in active_positions:
             return True
             
-        # Puis on vérifie réellement sur l'échange au cas où
+        # Puis on vérifie réellement sur l'échange
         pos = exchange.fetch_position(symbol)
-        if pos and float(pos.get('contracts', 0)) > 0:
+        is_open = pos and float(pos.get('contracts', 0)) > 0
+        
+        if is_open:
             # On en profite pour remettre à jour notre cache si besoin
             active_positions[symbol] = {
                 "symbol": symbol,
@@ -147,10 +149,14 @@ def has_open_position(symbol):
                 "timestamp": datetime.now().isoformat()
             }
             return True
-        return False
+        else:
+            # Si pas de position sur l'échange, on s'assure de nettoyer le cache
+            if symbol in active_positions:
+                del active_positions[symbol]
+            return False
     except Exception as e:
         logger.log_error(f"Error checking position for {symbol}", e)
-        # En cas d'erreur API, on préfère dire qu'il y a une position pour éviter les doublons
+        # En cas d'erreur API, on préfère dire qu'il y a une position (sécurité)
         return True
 
 def set_trailing_stop(symbol, distance):
@@ -322,13 +328,13 @@ def bot_loop():
                 logger.log_error(f"Loop error on {symbol}", e)
                 time.sleep(10)
 
-        # Nettoyage périodique du cache des positions actives (pour les sorties)
+        # Nettoyage périodique du cache des positions actives (vérification réelle sur Bybit)
         try:
             for s in list(active_positions.keys()):
-                if not has_open_position(s):
-                    del active_positions[s]
-        except:
-            pass
+                # On force la vérification sur l'échange pour vider le cache si la position est fermée
+                has_open_position(s, ignore_cache=True)
+        except Exception as e:
+            logger.log_error("Cleanup positions cache error", e)
             
         # Pause entre les cycles
         time.sleep(60)

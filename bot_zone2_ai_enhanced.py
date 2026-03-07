@@ -138,19 +138,23 @@ def cooldown_ok(symbol):
     elapsed = time.time() - last_trade_times[symbol]
     return elapsed > COOLDOWN_SECONDS
 
-def has_open_position(symbol):
+def has_open_position(symbol, ignore_cache=False):
     """Vérifie si une position est déjà ouverte sur Bybit pour ce symbole"""
     try:
         # Cache local d'abord
-        if active_positions.get(symbol):
+        if not ignore_cache and active_positions.get(symbol):
             return True
             
         # Bypass cache et vérification réelle sur l'échange
         pos = exchange.fetch_position(symbol)
-        if pos and float(pos.get('contracts', 0)) > 0:
+        is_open = pos and float(pos.get('contracts', 0)) > 0
+        
+        if is_open:
             active_positions[symbol] = True
             return True
-        return False
+        else:
+            active_positions[symbol] = False
+            return False
     except Exception as e:
         enhanced_logger.log_error(f"Error checking position for {symbol}", e)
         return True # Prudence par défaut
@@ -415,8 +419,8 @@ def run():
                                     position_closed, exit_reason = True, "TP"
                         else:
                             try:
-                                pos = exchange.fetch_position(symbol)
-                                if not pos or float(pos.get('contracts', 0)) == 0:
+                                # On ignore le cache ici car Bybit est la source de vérité pour la fermeture
+                                if not has_open_position(symbol, ignore_cache=True):
                                     position_closed, exit_reason = True, "SL/TP (Market)"
                             except: pass
 
