@@ -3,6 +3,7 @@ import threading
 import pandas as pd
 import math
 import os
+import json
 from datetime import datetime
 
 from config import *
@@ -21,6 +22,52 @@ app = Flask(__name__)
 last_trade_time = {}
 active_positions = {} # {symbol: trade_data}
 
+# Performance stats
+daily_pnl = 0.0
+total_trades = 0
+consecutive_losses = 0
+last_state_save = datetime.now().date().isoformat()
+
+STATE_FILE = "data/multisymbol_state.json"
+
+def save_state():
+    state = {
+        "daily_pnl": daily_pnl,
+        "total_trades": total_trades,
+        "consecutive_losses": consecutive_losses,
+        "last_save_date": last_state_save,
+        "signals_cache": signals_cache[-100:] # Persist some history
+    }
+    try:
+        os.makedirs("data", exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        logger.log_error("Error saving state", e)
+
+def load_state():
+    global daily_pnl, total_trades, consecutive_losses, last_state_save, signals_cache
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+                
+            # Check if it's a new day
+            current_date = datetime.now().date().isoformat()
+            if state.get("last_save_date") == current_date:
+                daily_pnl = state.get("daily_pnl", 0.0)
+                consecutive_losses = state.get("consecutive_losses", 0)
+            else:
+                daily_pnl = 0.0
+                consecutive_losses = 0
+                last_state_save = current_date
+                
+            total_trades = state.get("total_trades", 0)
+            signals_cache = state.get("signals_cache", [])
+            print(f"📊 State loaded: PnL Today={daily_pnl:.2f}, Trades={total_trades}")
+        except Exception as e:
+            logger.log_error("Error loading state", e)
+
 # ================= API =================
 
 @app.route("/api/signals")
@@ -37,7 +84,9 @@ def status():
         "threshold": SCORE_THRESHOLD,
         "capital": CAPITAL,
         "leverage": LEVERAGE,
-        "active_count": len(active_positions)
+        "active_count": len(active_positions),
+        "daily_pnl": daily_pnl,
+        "total_trades": total_trades
     })
 
 @app.route("/api/trades")
@@ -152,12 +201,58 @@ def has_open_position(symbol, ignore_cache=False):
         else:
             # Si pas de position sur l'échange, on s'assure de nettoyer le cache
             if symbol in active_positions:
+                print(f"🔄 Detection fmeture position {symbol}")
+                handle_position_closed(symbol)
                 del active_positions[symbol]
             return False
     except Exception as e:
         logger.log_error(f"Error checking position for {symbol}", e)
-        # En cas d'erreur API, on préfère dire qu'il y a une position (sécurité)
-        return True
+def handle_position_closed(symbol):
+    global daily_pnl, total_trades, consecutive_losses
+    try:
+        # Attendre un peu pour que Bybit enregistre le trade fermé
+        time.sleep(2)
+        
+        # Récupérer le PnL réalisé via l'API V5 de Bybit
+        clean_symbol = symbol.split(':')[0].replace('/', '')
+        pnl = 0.0
+        
+        try:
+            pnl_resp = exchange.private_get_v5_position_closed_pnl({
+                "category": "linear",
+                "symbol": clean_symbol,
+                "limit": 1
+            })
+            if pnl_resp.get('result', {}).get('list'):
+                pnl = float(pnl_resp['result']['list'][0].get('closedPnl', 0))
+        except Exception as e:
+            logger.log_error(f"Error fetching closed PnL for {symbol}", e)
+            # Fallback simple si l'API échoue
+            pnl = 0.0
+
+        daily_pnl += pnl
+        total_trades += 1
+        if pnl < 0:
+            consecutive_losses += 1
+        else:
+            consecutive_losses = 0
+        
+        print(f"💰 {symbol} Position fermée. PnL: {pnl:.2f} USDT. Total Jour: {daily_pnl:.2f} USDT")
+        save_state()
+        
+        # Log de sortie (minimaliste car réalisé sur l'échange)
+        trade_data = {
+            'timestamp': datetime.now().isoformat(),
+            'bot_name': BOT_NAME,
+            'symbol': symbol,
+            'pnl_usdt': pnl,
+            'result': "WIN" if pnl > 0 else "LOSS",
+            'exit_reason': 'Exchange closed (SL/TP/Trailing)'
+        }
+        logger.log_trade_detailed(trade_data)
+        
+    except Exception as e:
+        logger.log_error(f"Error handling closed position for {symbol}", e)
 
 def set_trailing_stop(symbol, distance):
     """Active le trailing stop via un appel API séparé (Bybit V5)"""
@@ -258,6 +353,7 @@ def open_trade(symbol, side, price, atr, score):
         msg = f"🟢 TRADE OPEN {BOT_NAME}\n\nSymbol: {symbol}\nSide: {side.upper()}\nScore: {score}/3\nPrice: {price:.2f}\nSL: {sl:.2f}\nTP: {tp:.2f}\nQty: {qty}"
         send_telegram(msg)
         print(f"✅ {msg}")
+        save_state()
 
     except Exception as e:
         logger.log_error(f"Trade error {symbol}", e)
@@ -266,6 +362,7 @@ def open_trade(symbol, side, price, atr, score):
 # ================= BOT LOOP =================
 
 def bot_loop():
+    global daily_pnl, consecutive_losses, last_state_save
     send_telegram(f"🚀 {BOT_NAME} STARTED\nSymbols: {len(SYMBOLS)}\nThreshold: {SCORE_THRESHOLD}")
     print(f"🤖 {BOT_NAME} Monitoring {SYMBOLS}")
 
@@ -318,8 +415,12 @@ def bot_loop():
                     "executed": executed,
                     "reason": reason
                 })
-                if len(signals_cache) > 100:
+                if len(signals_cache) > 200:
                     signals_cache.pop(0)
+                
+                # Save state periodically and on signals
+                if signal:
+                    save_state()
 
                 # Petit délai pour éviter de spammer l'API
                 time.sleep(1)
@@ -337,6 +438,7 @@ def bot_loop():
             logger.log_error("Cleanup positions cache error", e)
             
         # Pause entre les cycles
+        save_state()
         time.sleep(60)
 
 # ================= START =================
@@ -347,6 +449,8 @@ if __name__ == "__main__":
         exchange.load_markets()
     except:
         pass
+        
+    load_state()
         
     t = threading.Thread(target=start_api)
     t.daemon = True

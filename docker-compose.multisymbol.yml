@@ -15,6 +15,10 @@ services:
       - MAX_POSITIONS=${MAX_POSITIONS:-1}
       - SCORE_THRESHOLD=${SCORE_THRESHOLD:-2}
       - COOLDOWN_SECONDS=${COOLDOWN_SECONDS:-300}
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./trades.csv:/app/trades.csv
     restart: unless-stopped
     networks:
       - coolify

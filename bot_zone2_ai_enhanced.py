@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import threading
 from flask import Flask, jsonify
 import os
+import json
 from strategy_fvg_confluence import validate_fvg_confluence
 from database import init_db, insert_trade, get_recent_trades
 
@@ -114,6 +115,45 @@ initial_capital = CAPITAL
 total_trades = 0
 
 enhanced_logger = get_logger("ZONE2_AI")
+
+STATE_FILE = "data/zone2_state.json"
+last_state_save_date = datetime.now().date().isoformat()
+
+def save_state():
+    state = {
+        "daily_pnl": daily_pnl,
+        "consecutive_losses": consecutive_losses,
+        "total_trades": total_trades,
+        "last_save_date": last_state_save_date
+    }
+    try:
+        os.makedirs("data", exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        enhanced_logger.log_error("Error saving state", e)
+
+def load_state():
+    global daily_pnl, consecutive_losses, total_trades, last_state_save_date
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+            
+            # Reset daily metrics if it's a new day
+            current_date = datetime.now().date().isoformat()
+            if state.get("last_save_date") == current_date:
+                daily_pnl = state.get("daily_pnl", 0.0)
+                consecutive_losses = state.get("consecutive_losses", 0)
+            else:
+                daily_pnl = 0.0
+                consecutive_losses = 0
+                last_state_save_date = current_date
+                
+            total_trades = state.get("total_trades", 0)
+            print(f"📊 Zone2 State loaded: PnL Today={daily_pnl:.2f}, Trades={total_trades}")
+        except Exception as e:
+            enhanced_logger.log_error("Error loading state", e)
 
 # =========================
 # UTILS
@@ -354,7 +394,7 @@ def detect_trend(df):
 # MAIN MULTI-SYMBOL
 # =========================
 def run():
-    global daily_pnl, total_trades
+    global daily_pnl, total_trades, consecutive_losses, last_state_save_date
     
     print("🤖 Bot ZONE2 MULTI-SYMBOL démarré", flush=True)
     print("📊 Stratégie: EMA20/50 + MACD + RSI + Stochastic + OTE Fibonacci", flush=True)
@@ -492,6 +532,9 @@ def execute_entry(symbol, signal, df):
                     "last_price": current_price
                 }
                 
+                # Save state after opening position
+                save_state()
+                
                 msg = f"🟢 [{symbol}] TRADE OUVERT ({signal.upper()})\nPrix: {current_price:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f}"
                 print(msg, flush=True)
                 send_telegram(msg)
@@ -500,7 +543,7 @@ def execute_entry(symbol, signal, df):
 
 def finalize_trade(symbol, trade, exit_price, reason):
     """Finalise et log un trade terminé"""
-    global consecutive_losses, daily_pnl, total_trades
+    global consecutive_losses, daily_pnl, total_trades, last_state_save_date
     
     if trade['side'] == 'long':
         pnl_pct = (exit_price - trade['entry_price']) / trade['entry_price'] * 100
@@ -531,6 +574,7 @@ def finalize_trade(symbol, trade, exit_price, reason):
     }
     enhanced_logger.log_trade_detailed(trade_data)
     log_trade(symbol, trade['side'], trade['qty'], trade['entry_price'], exit_price, pnl_pct, result)
+    save_state()
     
     msg = f"{result} - [{symbol}] FERMÉ\nP&L: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)\nRaison: {reason}"
     send_telegram(msg)
@@ -539,6 +583,7 @@ def finalize_trade(symbol, trade, exit_price, reason):
 if __name__ == "__main__":
     # LANCER L'API ICI (APRES TOUTES LES ROUTES)
     print("START - Lancement de l'API dashboard...", flush=True)
+    load_state()
     threading.Thread(target=run_api, daemon=True).start()
     time.sleep(1)
     
