@@ -29,7 +29,7 @@ TP_ATR_MULTIPLIER = float(os.getenv("TP_ATR_MULTIPLIER", "3.0"))
 # =========================
 # TRADING SETTINGS
 # =========================
-TIMEFRAME = os.getenv("TIMEFRAME", "5m")
+TIMEFRAME = os.getenv("TIMEFRAME", "1m")
 SCORE_THRESHOLD = int(os.getenv("SCORE_THRESHOLD", "3"))
 SYMBOL = os.getenv("SYMBOL", "ETH/USDT:USDT")
 
