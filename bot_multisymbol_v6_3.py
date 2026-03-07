@@ -422,8 +422,8 @@ def bot_loop():
                 if signal:
                     save_state()
 
-                # Petit délai pour éviter de spammer l'API
-                time.sleep(1)
+                # Délai minimal pour ne pas saturer l'API
+                time.sleep(0.2)
 
             except Exception as e:
                 logger.log_error(f"Loop error on {symbol}", e)
@@ -437,9 +437,9 @@ def bot_loop():
         except Exception as e:
             logger.log_error("Cleanup positions cache error", e)
             
-        # Pause entre les cycles
+        # Pause très courte entre les cycles pour une réactivité maximale (5s)
         save_state()
-        time.sleep(60)
+        time.sleep(5)
 
 # ================= START =================
 
