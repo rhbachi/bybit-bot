@@ -193,19 +193,30 @@ class EnhancedLogger:
         """Récupère les derniers trades pour le dashboard"""
         if not os.path.exists(self.trades_file):
             return []
-        
-        df = pd.read_csv(self.trades_file)
-        df = df.tail(limit)
-        return df.to_dict('records')
-    
+        try:
+            df = pd.read_csv(self.trades_file)
+            df = df.tail(limit)
+            # Remplacer NaN et inf par des valeurs JSON-sérialisables
+            df = df.replace([float('inf'), float('-inf')], 0)
+            df = df.where(pd.notnull(df), None)
+            return df.to_dict('records')
+        except Exception as e:
+            self.log_error(f"Erreur get_recent_trades: {e}")
+            return []
+
     def get_recent_signals(self, limit=50):
         """Récupère les derniers signaux pour le dashboard"""
         if not os.path.exists(self.signals_file):
             return []
-        
-        df = pd.read_csv(self.signals_file)
-        df = df.tail(limit)
-        return df.to_dict('records')
+        try:
+            df = pd.read_csv(self.signals_file)
+            df = df.tail(limit)
+            df = df.replace([float('inf'), float('-inf')], 0)
+            df = df.where(pd.notnull(df), None)
+            return df.to_dict('records')
+        except Exception as e:
+            self.log_error(f"Erreur get_recent_signals: {e}")
+            return []
 
 # Instance globale pour chaque bot
 loggers = {}

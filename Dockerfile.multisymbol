@@ -12,4 +12,4 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 
 # Lancement dynamique du bot
-CMD ["sh", "-c", "${START_CMD:-python -u bot_multisymbol_v4.py}"]
+CMD ["sh", "-c", "${START_CMD:-python -u bot_multisymbol_v6_3.py}"]

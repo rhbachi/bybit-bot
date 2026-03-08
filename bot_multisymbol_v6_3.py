@@ -295,11 +295,27 @@ def set_trailing_stop(symbol, distance, activation_price=None):
 
 # ================= OPEN TRADE =================
 
+def get_base_currency(symbol):
+    """Extrait la devise de base d'un symbole. Ex: BTC/USDT:USDT → BTC"""
+    return symbol.split('/')[0]
+
 def open_trade(symbol, side, price, atr, score):
     # Sécurité ultime : On ne rentre pas si déjà en position
     if has_open_position(symbol):
         print(f"🚫 {symbol} déjà en position, ouverture annulée.")
         return
+
+    # Limite du nombre de positions simultanées
+    if len(active_positions) >= MAX_POSITIONS:
+        print(f"🚫 [{symbol}] Limite de {MAX_POSITIONS} positions atteinte ({len(active_positions)} ouvertes), ouverture annulée.")
+        return
+
+    # Pas deux positions sur le même actif de base (ex: BTC/USDT et BTC/ETH)
+    base = get_base_currency(symbol)
+    for open_sym in active_positions:
+        if get_base_currency(open_sym) == base:
+            print(f"🚫 [{symbol}] Position déjà ouverte sur {open_sym} (même base: {base}), ouverture annulée.")
+            return
 
     # Frais Bybit (Maker/Taker) sont d'environ 0.055% par ordre = 0.11% A/R
     # On force le TP à être au moins à 0.20% du prix pour couvrir les frais et faire du profit
