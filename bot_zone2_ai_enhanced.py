@@ -9,7 +9,6 @@ import threading
 from flask import Flask, jsonify
 import os
 import json
-from strategy_fvg_confluence import validate_fvg_confluence
 from database import init_db, insert_trade, get_recent_trades
 
 # =========================
@@ -58,6 +57,7 @@ def get_trades_api():
         print(f"FAILED - API trades: {e}", flush=True)
         return jsonify([])
 
+
 @api_app.route('/api/positions')
 def get_positions_api():
     """Return all current active positions"""
@@ -71,8 +71,8 @@ def get_positions_api():
 def run_api():
     """Lance l'API Flask dans un thread séparé"""
     try:
-        print("API dashboard demarree sur le port 5001", flush=True)
-        api_app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+        print("API dashboard demarree sur le port 5002", flush=True)
+        api_app.run(host='0.0.0.0', port=5002, debug=False, threaded=True)
     except Exception as e:
         print(f"FAILED - demarrage API: {e}", flush=True)
         time.sleep(5)
@@ -344,34 +344,21 @@ def check_circuit_breaker():
     return False, "OK"
 
 def check_signal_with_logging(symbol, df):
-    """Wrapper pour logger tous les signaux avec filtres de confluence"""
-    from strategy_ai_enhanced import debug_check_signal, detect_trend, get_state, calculate_signal_strength
-    
-    # 1. Calculer les indicateurs et le signal AI de base
+    """Calcule le signal FVG+Fibonacci+Momentum et le logue"""
+    from strategy_ai_enhanced import apply_indicators, check_signal, detect_trend, calculate_signal_strength
+
     df_with_indicators = apply_indicators(df)
-    signal = debug_check_signal(df_with_indicators)
-    
-    # 2. Appliquer le filtre de confluence FVG Institutional si un signal AI est présent
-    reason_not_executed = ""
-    if signal:
-        fvg_ok = validate_fvg_confluence(df_with_indicators, signal)
-        if not fvg_ok:
-            reason_not_executed = "Rejete - Pas de confluence FVG"
-            print(f"[{symbol}] SIGNAL AI ({signal}) rejete - pas de confluence FVG", flush=True)
-            signal = None
-    else:
-        reason_not_executed = "Pas de signal AI"
-    
-    # 3. Logging détaillé pour le dashboard
+    signal = check_signal(df_with_indicators)
+    reason_not_executed = "" if signal else "Pas de signal FVG/Fib"
+
     last_row = df_with_indicators.iloc[-1] if not df_with_indicators.empty else None
-    
     if last_row is not None:
         bb_position = 0
-        if 'bb_upper' in last_row and 'bb_lower' in last_row:
+        if 'bb_upper' in last_row.index and 'bb_lower' in last_row.index:
             bb_range = last_row['bb_upper'] - last_row['bb_lower']
             if bb_range > 0:
                 bb_position = (last_row['close'] - last_row['bb_lower']) / bb_range
-        
+
         signal_data = {
             'symbol': symbol,
             'signal': signal if signal else 'none',
@@ -382,15 +369,14 @@ def check_signal_with_logging(symbol, df):
             'stoch_k': last_row.get('stoch_k', 0),
             'stoch_d': last_row.get('stoch_d', 0),
             'bb_position': bb_position,
-            'ote_zone': get_state().get('ote_active', False),
-            'bios_detected': get_state().get('bios_level') is not None,
+            'ote_zone': False,
+            'bios_detected': False,
             'signal_strength': calculate_signal_strength(df_with_indicators, signal) if signal else 0,
-            'executed': True if signal else False,
-            'reason_not_executed': reason_not_executed if not signal else ''
+            'executed': signal is not None,
+            'reason_not_executed': reason_not_executed
         }
-        
         enhanced_logger.log_signal(signal_data)
-    
+
     return signal, df_with_indicators
 
 def detect_trend(df):

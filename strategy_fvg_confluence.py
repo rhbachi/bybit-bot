@@ -17,48 +17,49 @@ def calculate_atr(df, period=14):
 
 
 # =========================
-# IMPULSE DETECTION (5m)
-# =========================
-def detect_impulse(df):
-    if len(df) < 20:
-        return False
-
-    atr = calculate_atr(df)
-    last = df.iloc[-1]
-
-    range_candle = last['high'] - last['low']
-    body = abs(last['close'] - last['open'])
-    body_ratio = body / range_candle if range_candle > 0 else 0
-
-    avg_volume = df['volume'].rolling(20).mean().iloc[-1]
-
-    if (
-        range_candle >= 1.8 * atr.iloc[-1] and
-        body_ratio >= 0.75 and
-        last['volume'] >= 1.7 * avg_volume
-    ):
-        return True
-
-    return False
-
-
-# =========================
 # FAIR VALUE GAP
 # =========================
 def detect_fvg(df):
+    """Détecte un FVG sur les 3 dernières bougies"""
     if len(df) < 3:
         return None
 
     c1 = df.iloc[-3]
     c3 = df.iloc[-1]
 
-    # Bullish FVG
+    # Bullish FVG : gap entre le haut de la bougie 1 et le bas de la bougie 3
     if c3['low'] > c1['high']:
         return ("long", c1['high'], c3['low'])
 
-    # Bearish FVG
+    # Bearish FVG : gap entre le bas de la bougie 1 et le haut de la bougie 3
     if c3['high'] < c1['low']:
         return ("short", c3['high'], c1['low'])
+
+    return None
+
+
+def detect_recent_fvg(df, lookback=15):
+    """
+    Scanne les `lookback` dernières bougies pour trouver le FVG le plus récent.
+    Retourne (direction, fvg_low, fvg_high) ou None.
+    """
+    if len(df) < lookback + 3:
+        return None
+
+    # Parcourir du plus récent au plus ancien
+    for i in range(len(df) - 1, len(df) - lookback - 1, -1):
+        if i < 2:
+            break
+        c1 = df.iloc[i - 2]
+        c3 = df.iloc[i]
+
+        # Bullish FVG
+        if c3['low'] > c1['high']:
+            return ("long", c1['high'], c3['low'])
+
+        # Bearish FVG
+        if c3['high'] < c1['low']:
+            return ("short", c3['high'], c1['low'])
 
     return None
 
@@ -66,47 +67,22 @@ def detect_fvg(df):
 # =========================
 # FIBONACCI ZONE
 # =========================
-def fib_zone(df, lookback=20):
+def fib_zone(df, lookback=30):
+    """
+    Calcule la zone Fibonacci 50%-61.8% sur les `lookback` dernières bougies.
+    Retourne (fib_low, fib_high).
+    """
     if len(df) < lookback:
         return None, None
 
     swing_high = df['high'].iloc[-lookback:].max()
     swing_low = df['low'].iloc[-lookback:].min()
 
-    fib_50 = swing_high - 0.5 * (swing_high - swing_low)
-    fib_618 = swing_high - 0.618 * (swing_high - swing_low)
+    diff = swing_high - swing_low
+    if diff == 0:
+        return None, None
+
+    fib_50 = swing_high - 0.5 * diff
+    fib_618 = swing_high - 0.618 * diff
 
     return min(fib_50, fib_618), max(fib_50, fib_618)
-
-
-# =========================
-# CONFLUENCE CHECK
-# =========================
-def validate_fvg_confluence(df, ai_signal):
-    """
-    ai_signal: 'long' or 'short'
-    """
-
-    impulse_ok = detect_impulse(df)
-    if not impulse_ok:
-        return False
-
-    fvg_data = detect_fvg(df)
-    if not fvg_data:
-        return False
-
-    direction, fvg_low, fvg_high = fvg_data
-
-    if direction != ai_signal:
-        return False
-
-    fib_low, fib_high = fib_zone(df)
-    if fib_low is None:
-        return False
-
-    price = df['close'].iloc[-1]
-
-    in_fvg = fvg_low <= price <= fvg_high
-    in_fib = fib_low <= price <= fib_high
-
-    return in_fvg and in_fib
