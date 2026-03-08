@@ -227,6 +227,9 @@ elif page == "🧪 Visual Backtester":
                 apply_ind, check_sig = tuner.strategies[strat_name]
                 df = apply_ind(df)
                 
+                # Convert timestamps from ms to readable datetime for Plotly
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                
                 # Arrays to store markers for plotting
                 buy_markers_x = []
                 buy_markers_y = []
