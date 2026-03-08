@@ -466,49 +466,68 @@ def debug_check_signal(df):
                    last.get('ema20',0), last.get('ema50',0), last['close'])
         signal_data['reason_not_executed'] = 'Pas de tendance claire'
         log_signal_to_file(signal_data)
+        reset_state()
         return None
     
     logger.info(f"✅ Tendance détectée: {trend}")
     
-    # Vérifier BIOS
+    # MACHINE À ÉTATS : BIOS -> OTE -> MOMENTUM
+    global _last_bios_level, _last_bios_direction, _ote_active, _ote_entry_zone
+    
+    # Étape 1 : Détecter un nouveau Break of Structure (BIOS)
     bios = detect_bios(df)
-    signal_data['bios_detected'] = bios is not None
     
-    if not bios:
-        logger.info("❌ Pas de Break of Structure (BIOS)")
-        signal_data['reason_not_executed'] = 'Pas de BIOS'
+    if bios and bios['direction'] == trend:
+        # Nouveau BIOS détecté dans le sens de la tendance
+        _last_bios_level = bios['level']
+        _last_bios_direction = bios['direction']
+        
+        # Calcul de la zone OTE associée
+        ote = detect_ote_zone(df, bios['direction'], bios['level'])
+        if ote:
+            _ote_entry_zone = ote['entry_zone']
+            _ote_active = False # On attend maintenant le pullback
+            logger.info(f"✅ Nouveau BIOS détecté à {_last_bios_level:.2f}. Zone OTE calculée: {_ote_entry_zone[0]:.2f}-{_ote_entry_zone[1]:.2f}")
+    
+    signal_data['bios_detected'] = _last_bios_level is not None
+    
+    # Étape 2 : Vérifier si on piste un setup
+    if not _last_bios_level or not _ote_entry_zone:
+        logger.info("❌ En attente d'un Break of Structure (BIOS)")
+        signal_data['reason_not_executed'] = 'Pas de BIOS / Attente breakout'
         log_signal_to_file(signal_data)
         return None
     
-    # AJOUTEZ CETTE LIGNE POUR VOIR LES BIOS ASSOUPLIS
-    logger.info(f"✅ BIOS ASSOUPLI détecté: {bios['direction']} at {bios['level']:.2f}")
+    # Invalidation si la tendance se retourne pendant qu'on attend
+    if trend != _last_bios_direction:
+        logger.info("❌ Tendance inversée, annulation du setup BIOS en cours")
+        reset_state()
+        signal_data['reason_not_executed'] = 'Tendance inversée'
+        log_signal_to_file(signal_data)
+        return None
 
-    
-    # Vérifier zone OTE
-    ote = detect_ote_zone(df, bios['direction'], bios['level'])
-    signal_data['ote_zone'] = ote is not None
-    
-    if not ote:
-        logger.info("❌ Pas de zone OTE calculable")
-        signal_data['reason_not_executed'] = 'Pas de zone OTE'
-        log_signal_to_file(signal_data)
-        return None
-    
+    # Étape 3 : Vérifier le Pullback dans la zone OTE
     current_price = df['close'].iloc[-1]
-    zone_low, zone_high = ote['entry_zone']
+    zone_low, zone_high = _ote_entry_zone
+    
+    # On regarde si le prix "touche" ou est "dans" la zone
     in_zone = zone_low <= current_price <= zone_high
     
-    logger.info(f"   Zone OTE: {zone_low:.2f}-{zone_high:.2f}")
-    logger.info(f"   Prix actuel: {current_price:.2f}")
-    logger.info(f"   Dans zone: {in_zone}")
-    
-    if not in_zone:
-        logger.info("❌ Prix en dehors de la zone OTE")
-        signal_data['reason_not_executed'] = 'Prix hors zone OTE'
-        log_signal_to_file(signal_data)
-        return None
-    
-    # Vérifier momentum
+    if not _ote_active:
+        if in_zone:
+            _ote_active = True # Le prix a touché la zone, elle est active pour un rebond
+            logger.info("✅ Le prix est entré dans la zone OTE ! Attente du momentum...")
+        else:
+            # On est toujours en attente du pullback
+            logger.info(f"❌ Attente du pullback dans l'OTE ({zone_low:.2f}-{zone_high:.2f}). Prix: {current_price:.2f}")
+            signal_data['reason_not_executed'] = 'Attente du Pullback (OTE)'
+            log_signal_to_file(signal_data)
+            return None
+
+    # Si on arrive ici, la zone OTE est "active" (le pullback a eu lieu)
+    signal_data['ote_zone'] = True
+
+    # Étape 4 : Vérifier la confirmation par le Momentum pour le rebond
     signals = detect_momentum_signal(df, trend)
     logger.info(f"   Signaux momentum: {signals}")
     
@@ -524,8 +543,9 @@ def debug_check_signal(df):
     logger.info(f"   Score momentum: {score}/3")
     signal_data['signal_strength'] = score
     
+    # On autorise l'entrée avec un score de 2/3 (assouplissement)
     if score < 2:
-        logger.info("❌ Score momentum insuffisant")
+        logger.info("❌ Pullback effectué mais Momentum insuffisant pour valider le rebond")
         signal_data['reason_not_executed'] = f'Momentum insuffisant ({score}/3)'
         log_signal_to_file(signal_data)
         return None
@@ -533,6 +553,9 @@ def debug_check_signal(df):
     # SIGNAL TROUVÉ !
     result = trend if trend == 'bullish' else 'bearish'
     logger.info(f"🎉 SIGNAL TROUVÉ: {result}")
+    
+    # On réinitialise l'état pour chercher le prochain setup après une entrée
+    reset_state()
     
     signal_data['signal'] = result
     signal_data['executed'] = True
