@@ -59,7 +59,7 @@ def login_page():
         username = st.text_input("👤 Identifiant", placeholder="admin")
         password = st.text_input("🔑 Mot de passe", type="password", placeholder="••••••••")
         
-        if st.button("🔓 Se Connecter", type="primary", use_container_width=True):
+        if st.button("🔓 Se Connecter", type="primary", width=True):
             if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
                 st.session_state.authenticated = True
                 st.success("✅ Connexion réussie !")
@@ -150,7 +150,7 @@ if page == "📊 Live Monitoring":
                         st.markdown("#### Recent Trades")
                         df_trades = pd.DataFrame(trades)
                         # Format dataframe
-                        st.dataframe(df_trades[['timestamp', 'symbol', 'result', 'pnl_usdt', 'exit_reason']], use_container_width=True)
+                        st.dataframe(df_trades[['timestamp', 'symbol', 'result', 'pnl_usdt', 'exit_reason']], width=True)
             else:
                 st.warning("Bot is offline or starting.")
         except Exception as e:
@@ -173,7 +173,7 @@ if page == "📊 Live Monitoring":
                     if trades2:
                         st.markdown("#### Recent Activity")
                         df_trades2 = pd.DataFrame(trades2)
-                        st.dataframe(df_trades2[['timestamp', 'symbol', 'pnl_usdt', 'result']], use_container_width=True)
+                        st.dataframe(df_trades2[['timestamp', 'symbol', 'pnl_usdt', 'result']], width=True)
             else:
                 st.warning("Bot is offline or starting.")
         except Exception as e:
@@ -239,7 +239,7 @@ elif page == "📡 Market Scanner":
             
             if results:
                 st.success(f"Found {len(results)} potential setups!")
-                st.dataframe(pd.DataFrame(results), use_container_width=True)
+                st.dataframe(pd.DataFrame(results), width=True)
             else:
                 st.warning("No high-probability setups found right now.")
                 
@@ -344,13 +344,13 @@ elif page == "🧪 Visual Backtester":
                 fig.update_layout(template="plotly_dark", height=600, margin=dict(l=0, r=0, t=30, b=0))
                 # Disable rangeslider
                 fig.update_layout(xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width=True)
                 
                 # Equity Curve
                 st.subheader("💰 Equity Curve ($1000 Start, 2% Risk)")
                 fig_eq = go.Figure(data=[go.Scatter(x=time_axis, y=equity_curve, mode='lines', line=dict(color='#00FF00', width=2))])
                 fig_eq.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=10, b=0))
-                st.plotly_chart(fig_eq, use_container_width=True)
+                st.plotly_chart(fig_eq, width=True)
                 
                 st.success(f"Final Capital: ${capital:.2f} ({((capital/1000)-1)*100:.2f}%)")
                 
