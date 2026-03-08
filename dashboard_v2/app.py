@@ -9,9 +9,16 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     import config
-    from utils import fetch_ohlcv  # Make sure this utility exists or we'll define a local one
 except ImportError:
     pass
+
+# ==========================================================
+# Configurable Bot API URLs via environment variables
+# Set these in Coolify to the internal service hostnames
+# e.g. BOT_MULTISYMBOL_URL=http://bybit-bot-multisymbol:5001
+# ==========================================================
+BOT_MULTISYMBOL_URL = os.environ.get("BOT_MULTISYMBOL_URL", "http://127.0.0.1:5001")
+BOT_ZONE2_URL = os.environ.get("BOT_ZONE2_URL", "http://127.0.0.1:5002")
 
 st.set_page_config(
     page_title="Bybit Bots Dashboard Pro",
@@ -67,7 +74,7 @@ if page == "📊 Live Monitoring":
     with col1:
         st.subheader("🌐 Multi-Symbol Bot")
         try:
-            res_status = requests.get("http://127.0.0.1:5001/api/status", timeout=2)
+            res_status = requests.get(f"{BOT_MULTISYMBOL_URL}/api/status", timeout=2)
             if res_status.status_code == 200:
                 data = res_status.json()
                 
@@ -82,7 +89,7 @@ if page == "📊 Live Monitoring":
                         f"**SL Multi**: {data.get('sl_multi', 1.5)}x | **TP Multi**: {data.get('tp_multi', 3.0)}x")
                 
                 # Fetch recent trades
-                res_trades = requests.get("http://127.0.0.1:5001/api/trades", timeout=2)
+                res_trades = requests.get(f"{BOT_MULTISYMBOL_URL}/api/trades", timeout=2)
                 if res_trades.status_code == 200:
                     trades = res_trades.json()
                     if trades:
@@ -93,12 +100,12 @@ if page == "📊 Live Monitoring":
             else:
                 st.warning("Bot is offline or starting.")
         except Exception as e:
-            st.error(f"Cannot connect to Multi-Symbol API (Port 5001). Is it running?")
+            st.error(f"Cannot connect to Multi-Symbol API ({BOT_MULTISYMBOL_URL}). Is it running?")
             
     with col2:
         st.subheader("🎯 Zone 2 AI Bot")
         try:
-            res_status2 = requests.get("http://127.0.0.1:5002/api/status", timeout=2)
+            res_status2 = requests.get(f"{BOT_ZONE2_URL}/api/status", timeout=2)
             if res_status2.status_code == 200:
                 data2 = res_status2.json()
                 
@@ -106,7 +113,7 @@ if page == "📊 Live Monitoring":
                 m1.metric("Daily PnL", f"{data2.get('daily_pnl', 0):.2f} USDT")
                 m2.metric("Active Trades", data2.get('active_count', 0))
                 
-                res_trades2 = requests.get("http://127.0.0.1:5002/api/trades", timeout=2)
+                res_trades2 = requests.get(f"{BOT_ZONE2_URL}/api/trades", timeout=2)
                 if res_trades2.status_code == 200:
                     trades2 = res_trades2.json()
                     if trades2:
@@ -116,7 +123,7 @@ if page == "📊 Live Monitoring":
             else:
                 st.warning("Bot is offline or starting.")
         except Exception as e:
-            st.error(f"Cannot connect to Zone 2 API (Port 5002). Is it running?")
+            st.error(f"Cannot connect to Zone 2 API ({BOT_ZONE2_URL}). Is it running?")
             
     time.sleep(refresh_rate)
     st.rerun()
