@@ -79,7 +79,7 @@ def run_api():
         threading.Thread(target=run_api, daemon=True).start()
 
 # IMPORTS DU BOT
-from config import exchange, SYMBOLS, CAPITAL, LEVERAGE
+from config import exchange, SYMBOLS, CAPITAL, LEVERAGE, MAX_POSITIONS
 from risk_improved import calculate_position_size
 from notifier import send_telegram
 from logger import init_logger, log_trade
@@ -249,6 +249,7 @@ def get_status():
             'daily_pnl': daily_pnl,
             'total_trades': total_trades,
             'consecutive_losses': consecutive_losses,
+            'max_positions': MAX_POSITIONS
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -491,6 +492,12 @@ def get_base_currency(symbol):
 def execute_entry(symbol, signal, df):
     """Gère l'ouverture d'une position"""
     global total_trades
+
+    # 1. Vérifie la limite globale de positions
+    current_active_count = sum(1 for p in active_positions.values() if p)
+    if current_active_count >= MAX_POSITIONS:
+        print(f"🚫 [{symbol}] Limite de {MAX_POSITIONS} positions atteinte, ouverture annulée.", flush=True)
+        return
 
     # Pas deux positions sur le même actif de base
     base = get_base_currency(symbol)
