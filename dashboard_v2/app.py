@@ -27,6 +27,55 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ==========================================================
+# AUTHENTICATION
+# Credentials are set via environment variables in Coolify:
+# DASHBOARD_USERNAME and DASHBOARD_PASSWORD
+# ==========================================================
+ADMIN_USERNAME = os.environ.get("DASHBOARD_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "bybit2024")
+
+def check_auth():
+    """Returns True if user is authenticated."""
+    return st.session_state.get("authenticated", False)
+
+def login_page():
+    """Shows the login form and handles authentication."""
+    st.markdown("""
+    <style>
+        .login-container { max-width: 400px; margin: 100px auto; padding: 30px; 
+            background: #1E1E2E; border-radius: 16px; border: 1px solid #333; }
+        .login-title { text-align: center; color: #00FF88; font-size: 32px; font-weight: bold; margin-bottom: 8px;}
+        .login-sub { text-align: center; color: #888; font-size: 14px; margin-bottom: 24px;}
+    </style>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown('<div class="login-title">🤖 Bybit Dashboard</div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-sub">Accès Administrateur</div>', unsafe_allow_html=True)
+        st.markdown("---")
+        
+        username = st.text_input("👤 Identifiant", placeholder="admin")
+        password = st.text_input("🔑 Mot de passe", type="password", placeholder="••••••••")
+        
+        if st.button("🔓 Se Connecter", type="primary", use_container_width=True):
+            if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+                st.session_state.authenticated = True
+                st.success("✅ Connexion réussie !")
+                st.rerun()
+            else:
+                st.error("❌ Identifiants incorrects.")
+
+# Gate the entire app behind login
+if not check_auth():
+    login_page()
+    st.stop()
+
+# ==========================================================
+# MAIN APP (only visible when authenticated)
+# ==========================================================
+
 # Custom CSS for a darker, more modern look
 st.markdown("""
 <style>
@@ -57,6 +106,11 @@ page = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.info("Dashboard Pro for Auto-Tuned Bybit Scalping Bots.")
+st.sidebar.markdown("---")
+st.sidebar.caption(f"👤 Connecté : **{ADMIN_USERNAME}**")
+if st.sidebar.button("🔒 Se Déconnecter"):
+    st.session_state.authenticated = False
+    st.rerun()
 
 
 # ==========================================
