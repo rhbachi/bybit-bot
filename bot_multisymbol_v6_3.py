@@ -135,12 +135,13 @@ def fetch_data(symbol):
 
 # ================= POSITION SIZE =================
 
-def calculate_position_size(price, atr):
-    if atr == 0:
+def calculate_position_size(price, stop_distance):
+    if stop_distance <= 0:
         return None
         
     risk_amount = CAPITAL * RISK_PER_TRADE
-    stop_distance = atr * CURRENT_SL_MULTI
+    
+    qty = (risk_amount / stop_distance) * LEVERAGE
     
     qty = (risk_amount / stop_distance) * LEVERAGE
     
@@ -300,7 +301,16 @@ def open_trade(symbol, side, price, atr, score):
         print(f"🚫 {symbol} déjà en position, ouverture annulée.")
         return
 
-    qty = calculate_position_size(price, atr)
+    # Frais Bybit (Maker/Taker) sont d'environ 0.055% par ordre = 0.11% A/R
+    # On force le TP à être au moins à 0.20% du prix pour couvrir les frais et faire du profit
+    min_tp_dist = price * 0.0020
+    # On force le SL à être au moins à 0.10% pour ne pas couper avec le bruit
+    min_sl_dist = price * 0.0010
+    
+    sl_dist = max(atr * CURRENT_SL_MULTI, min_sl_dist)
+    tp_dist = max(atr * CURRENT_TP_MULTI, min_tp_dist)
+    
+    qty = calculate_position_size(price, sl_dist)
     if qty is None:
         return
 
@@ -310,18 +320,20 @@ def open_trade(symbol, side, price, atr, score):
         return
 
     if side == "long":
-        sl = price - atr * CURRENT_SL_MULTI
-        tp = price + atr * CURRENT_TP_MULTI
+        sl = price - sl_dist
+        tp = price + tp_dist
         order_side = "buy"
     else:
-        sl = price + atr * CURRENT_SL_MULTI
-        tp = price - atr * CURRENT_TP_MULTI
+        sl = price + sl_dist
+        tp = price - tp_dist
         order_side = "sell"
 
-    # Calcul de la distance du trailing stop (ex: 50% de l'ATR)
-    trailing_distance = atr * 0.5
-    # Prix d'activation : quand on a déjà gagné 0.5 ATR
-    activation_price = price + (atr * 0.5) if side == "long" else price - (atr * 0.5)
+    # Calcul de la distance du trailing stop
+    # On active le trailing stop seulement quand on a couvert les frais + un peu de profit
+    trailing_distance = max(atr * 0.5, price * 0.0010)
+    activation_dist = max(atr * 0.5, price * 0.0015)
+    
+    activation_price = price + activation_dist if side == "long" else price - activation_dist
 
     try:
         # Configuration SL/TP optimisée pour Bybit V5 (Linear)
