@@ -246,7 +246,9 @@ def get_status():
             'leverage': LEVERAGE,
             'status': 'running',
             'active_count': sum(1 for p in active_positions.values() if p),
-            'daily_pnl': daily_pnl
+            'daily_pnl': daily_pnl,
+            'total_trades': total_trades,
+            'consecutive_losses': consecutive_losses,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -482,10 +484,21 @@ def run():
                 
         time.sleep(60)
 
+def get_base_currency(symbol):
+    """Extrait la devise de base d'un symbole. Ex: BTC/USDT:USDT → BTC"""
+    return symbol.split('/')[0]
+
 def execute_entry(symbol, signal, df):
     """Gère l'ouverture d'une position"""
     global total_trades
-    
+
+    # Pas deux positions sur le même actif de base
+    base = get_base_currency(symbol)
+    for open_sym, is_open in active_positions.items():
+        if is_open and get_base_currency(open_sym) == base and open_sym != symbol:
+            print(f"🚫 [{symbol}] Position déjà ouverte sur {open_sym} (même base: {base}), ouverture annulée.", flush=True)
+            return
+
     current_price = df['close'].iloc[-1]
     sl_price, tp_price, atr_pct = calculate_sl_tp_adaptive(current_price, signal, df)
     
@@ -518,9 +531,9 @@ def execute_entry(symbol, signal, df):
                     "qty": qty,
                     "sl_price": sl_price,
                     "tp_price": tp_price,
-                    "entry_time": datetime.now(timezone.utc),
-                    "highest_price": current_price if signal == "long" else 0,
-                    "lowest_price": current_price if signal == "short" else float('inf'),
+                    "entry_time": datetime.now(timezone.utc).isoformat(),
+                    "highest_price": current_price,
+                    "lowest_price": current_price,
                     "trailing_activated": False,
                     "last_price": current_price
                 }
