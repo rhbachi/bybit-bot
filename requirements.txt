@@ -1,10 +1,10 @@
-﻿txt
 ccxt==4.3.57
 pandas
+pandas_ta
 flask
 requests
 numpy
-pandas
 python-dotenv
 openpyxl
 plotly
+streamlit
