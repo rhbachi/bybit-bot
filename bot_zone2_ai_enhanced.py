@@ -224,7 +224,7 @@ def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
             'tpTriggerBy': 'LastPrice',
             'slTriggerBy': 'MarkPrice',
             'tpslMode': 'Full',
-            'tpOrderType': 'Limit',
+            'tpOrderType': 'Market',
             'slOrderType': 'Market',
             'positionIdx': 0,
         })
@@ -253,9 +253,6 @@ def get_status():
 
 def update_trailing_stop(symbol, side, qty, current_price, current_sl):
     """Met à jour le trailing stop avec sécurisation du prix d'entrée (Break-even)"""
-    if PAPER_TRADING:
-        return current_sl
-    
     trade = trades_state.get(symbol)
     if not trade:
         return current_sl
@@ -265,56 +262,55 @@ def update_trailing_stop(symbol, side, qty, current_price, current_sl):
     if side == 'long':
         if current_price > trade['highest_price']:
             trade['highest_price'] = current_price
-            
+
         gain_pct = (current_price - entry_price) / entry_price
-        
+
         if gain_pct > TRAILING_STOP_ACTIVATION:
-            # calcul du nouveau SL théorique
             theoretical_sl = current_price * (1 - TRAILING_STOP_DISTANCE)
-            
-            # Étape 1 : Si on vient d'activer, on place d'abord à Break-Even (entrée + tiny profit)
-            # Étape 2 : On ne suit le prix que si le nouveau SL est > prix d'entrée
             new_sl = max(theoretical_sl, entry_price * 1.001)
-            
+
             if new_sl > current_sl:
                 print(f"📈 [{symbol}] Trailing stop: {current_sl:.2f} → {new_sl:.2f} (Profit sécurisé)", flush=True)
-                try:
-                    exchange.private_post_v5_position_trading_stop({
-                        'category': 'linear',
-                        'symbol': symbol.split(':')[0].replace('/', ''),
-                        'stopLoss': str(new_sl),
-                        'slTriggerBy': 'MarkPrice',
-                        'positionIdx': 0,
-                    })
-                    return new_sl
-                except Exception as e:
-                    enhanced_logger.log_error(f"Erreur trailing stop {symbol}", e)
-                    
+                if not PAPER_TRADING:
+                    try:
+                        exchange.private_post_v5_position_trading_stop({
+                            'category': 'linear',
+                            'symbol': symbol.split(':')[0].replace('/', ''),
+                            'stopLoss': str(new_sl),
+                            'slTriggerBy': 'MarkPrice',
+                            'positionIdx': 0,
+                        })
+                    except Exception as e:
+                        enhanced_logger.log_error(f"Erreur trailing stop {symbol}", e)
+                        return current_sl
+                return new_sl
+
     else:  # short
         if current_price < trade['lowest_price']:
             trade['lowest_price'] = current_price
-            
+
         gain_pct = (entry_price - current_price) / entry_price
-        
+
         if gain_pct > TRAILING_STOP_ACTIVATION:
             theoretical_sl = current_price * (1 + TRAILING_STOP_DISTANCE)
-            # Break-even pour Short
             new_sl = min(theoretical_sl, entry_price * 0.999)
-            
+
             if new_sl < current_sl:
                 print(f"📈 [{symbol}] Trailing stop: {current_sl:.2f} → {new_sl:.2f} (Profit sécurisé)", flush=True)
-                try:
-                    exchange.private_post_v5_position_trading_stop({
-                        'category': 'linear',
-                        'symbol': symbol.split(':')[0].replace('/', ''),
-                        'stopLoss': str(new_sl),
-                        'slTriggerBy': 'MarkPrice',
-                        'positionIdx': 0,
-                    })
-                    return new_sl
-                except Exception as e:
-                    enhanced_logger.log_error(f"Erreur trailing stop {symbol}", e)
-    
+                if not PAPER_TRADING:
+                    try:
+                        exchange.private_post_v5_position_trading_stop({
+                            'category': 'linear',
+                            'symbol': symbol.split(':')[0].replace('/', ''),
+                            'stopLoss': str(new_sl),
+                            'slTriggerBy': 'MarkPrice',
+                            'positionIdx': 0,
+                        })
+                    except Exception as e:
+                        enhanced_logger.log_error(f"Erreur trailing stop {symbol}", e)
+                        return current_sl
+                return new_sl
+
     return current_sl
 
 def check_circuit_breaker():
