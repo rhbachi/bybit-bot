@@ -240,6 +240,7 @@ if page == "📊 Live Monitoring":
 
     # ── Tab 1: Multi-Symbol Bot ──────────────────────────────
     with tab1:
+        trades_ms = api_get(BOT_MULTISYMBOL_URL, "/api/trades")
         data = api_get(BOT_MULTISYMBOL_URL, "/api/status")
 
         if data:
@@ -250,8 +251,7 @@ if page == "📊 Live Monitoring":
             pnl_cls = "neg" if pnl < 0 else ""
             sign = "+" if pnl >= 0 else ""
 
-            # Fetch trades to calculate WR and Best Symbol
-            trades_ms = api_get(BOT_MULTISYMBOL_URL, "/api/trades")
+            # Calculate WR and Best Symbol from already fetched trades
             wr_ms, best_ms = get_global_stats(trades_ms)
 
             st.markdown(f"""
@@ -330,10 +330,9 @@ if page == "📊 Live Monitoring":
                     st.plotly_chart(fig_profit, use_container_width=True)
 
         # Recent trades
-        trades = api_get(BOT_MULTISYMBOL_URL, "/api/trades")
-        if trades:
+        if trades_ms:
             st.markdown('<div class="section-title">📋 Trades Récents</div>', unsafe_allow_html=True)
-            df_t = pd.DataFrame(trades)
+            df_t = pd.DataFrame(trades_ms)
             cols = [c for c in ['timestamp', 'symbol', 'side', 'result', 'pnl_usdt', 'pnl_percent', 'exit_reason'] if c in df_t.columns]
             if cols:
                 df_show = df_t[cols].copy()
@@ -347,6 +346,7 @@ if page == "📊 Live Monitoring":
 
     # ── Tab 2: Zone2 AI Bot ──────────────────────────────────
     with tab2:
+        trades_z2 = api_get(BOT_ZONE2_URL, "/api/trades")
         data2 = api_get(BOT_ZONE2_URL, "/api/status")
 
         if data2:
@@ -359,8 +359,7 @@ if page == "📊 Live Monitoring":
             cons_loss = data2.get('consecutive_losses', 0)
             cons_cls = "neg" if cons_loss >= 2 else "neutral"
 
-            # Fetch trades to calculate WR and Best Symbol
-            trades_z2 = api_get(BOT_ZONE2_URL, "/api/trades")
+            # Calculate WR and Best Symbol from already fetched trades
             wr_z2, best_z2 = get_global_stats(trades_z2)
 
             st.markdown(f"""
@@ -412,10 +411,9 @@ if page == "📊 Live Monitoring":
                 st.dataframe(df_sig_show, use_container_width=True, hide_index=True)
 
         # Trades récents
-        trades2 = api_get(BOT_ZONE2_URL, "/api/trades")
-        if trades2:
+        if trades_z2:
             st.markdown('<div class="section-title">📋 Trades Récents</div>', unsafe_allow_html=True)
-            df_t2 = pd.DataFrame(trades2)
+            df_t2 = pd.DataFrame(trades_z2)
             t2_cols = [c for c in ['timestamp', 'symbol', 'side', 'entry_price', 'exit_price', 'pnl_usdt', 'pnl_percent', 'result', 'exit_reason'] if c in df_t2.columns]
             if t2_cols:
                 df_t2_show = df_t2[t2_cols].copy()
@@ -427,7 +425,7 @@ if page == "📊 Live Monitoring":
 
             # Charts for Zone2
             st.markdown('<div class="section-title">📊 Performance par Symbole</div>', unsafe_allow_html=True)
-            z2_stats = calculate_stats(trades2)
+            z2_stats = calculate_stats(trades_z2)
             if z2_stats:
                 df_stats_z2 = pd.DataFrame.from_dict(z2_stats, orient='index').reset_index().rename(columns={'index': 'symbol'})
                 
