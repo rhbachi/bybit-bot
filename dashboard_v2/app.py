@@ -4,6 +4,8 @@ import requests
 import time
 import os
 import sys
+import plotly.express as px
+import plotly.graph_objects as go
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
@@ -182,6 +184,51 @@ def color_result(val):
         return "color: #FF4B4B"
     return ""
 
+def calculate_stats(trades):
+    if not trades:
+        return None
+    df = pd.DataFrame(trades)
+    if df.empty:
+        return None
+    
+    stats = {}
+    if 'symbol' in df.columns and 'pnl_usdt' in df.columns:
+        # Convert pnl_usdt to numeric
+        df['pnl_usdt'] = pd.to_numeric(df['pnl_usdt'], errors='coerce').fillna(0)
+        
+        # Group by symbol
+        for symbol, group in df.groupby('symbol'):
+            wins = len(group[group['pnl_usdt'] > 0])
+            total = len(group)
+            wr = (wins / total * 100) if total > 0 else 0
+            profit = group['pnl_usdt'].sum()
+            stats[symbol] = {'win_rate': wr, 'profit': profit, 'trades': total}
+            
+    return stats
+
+def get_global_stats(trades):
+    if not trades:
+        return 0, "N/A"
+    df = pd.DataFrame(trades)
+    if df.empty:
+        return 0, "N/A"
+    
+    # Global Win Rate
+    if 'pnl_usdt' in df.columns:
+        df['pnl_usdt'] = pd.to_numeric(df['pnl_usdt'], errors='coerce').fillna(0)
+        wins = len(df[df['pnl_usdt'] > 0])
+        wr = (wins / len(df) * 100) if len(df) > 0 else 0
+    else:
+        wr = 0
+        
+    # Best Symbol
+    stats = calculate_stats(trades)
+    best_sym = "N/A"
+    if stats:
+        best_sym = max(stats, key=lambda x: stats[x]['profit'])
+        
+    return wr, best_sym
+
 
 # ==========================================================
 # PAGE 1: LIVE MONITORING
@@ -203,6 +250,10 @@ if page == "📊 Live Monitoring":
             pnl_cls = "neg" if pnl < 0 else ""
             sign = "+" if pnl >= 0 else ""
 
+            # Fetch trades to calculate WR and Best Symbol
+            trades_ms = api_get(BOT_MULTISYMBOL_URL, "/api/trades")
+            wr_ms, best_ms = get_global_stats(trades_ms)
+
             st.markdown(f"""
             <div class="metric-row">
               <div class="metric-card">
@@ -210,32 +261,73 @@ if page == "📊 Live Monitoring":
                 <div class="metric-value {pnl_cls}">{sign}{pnl:.2f} USDT</div>
               </div>
               <div class="metric-card">
-                <div class="metric-label">Positions actives</div>
+                <div class="metric-label">Win Rate</div>
+                <div class="metric-value neutral">{wr_ms:.1f}%</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-label">Best Symbol</div>
+                <div class="metric-value neutral" style="font-size: 16px;">{best_ms}</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-label">Positions</div>
                 <div class="metric-value neutral">{data.get('active_count', 0)}</div>
               </div>
               <div class="metric-card">
                 <div class="metric-label">Total Trades</div>
                 <div class="metric-value neutral">{data.get('total_trades', 0)}</div>
               </div>
-              <div class="metric-card">
-                <div class="metric-label">Capital</div>
-                <div class="metric-value neutral">{data.get('capital', '–')} USDT</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-label">Levier</div>
-                <div class="metric-value neutral">{data.get('leverage', '–')}x</div>
-              </div>
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown('<div class="section-title">🧠 Auto-Tuner</div>', unsafe_allow_html=True)
-            c1, c2, c3, c4 = st.columns(4)
+            st.markdown('<div class="section-title">🧠 Auto-Tuner & Config</div>', unsafe_allow_html=True)
+            c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Stratégie", data.get('active_strategy', 'v6'))
             c2.metric("Threshold", data.get('threshold', 3))
             c3.metric("SL Multi", f"{data.get('sl_multi', 1.5)}x")
             c4.metric("TP Multi", f"{data.get('tp_multi', 3.0)}x")
+            c5.metric("Capital", f"{data.get('capital', 0)} USDT")
         else:
             st.error(f"❌ Multi-Symbol API hors ligne ({BOT_MULTISYMBOL_URL})")
+
+        # Open Positions Multi-Symbol
+        positions_ms = api_get(BOT_MULTISYMBOL_URL, "/api/positions")
+        if positions_ms:
+            st.markdown('<div class="section-title">📍 Positions Ouvertes</div>', unsafe_allow_html=True)
+            df_pos_ms = pd.DataFrame(positions_ms)
+            pos_cols = [c for c in ['symbol', 'side', 'entry_price', 'qty', 'timestamp'] if c in df_pos_ms.columns]
+            if pos_cols:
+                st.dataframe(df_pos_ms[pos_cols], use_container_width=True, hide_index=True)
+        elif data:
+            st.info("Aucune position ouverte.")
+
+        # Recent Signals Multi-Symbol
+        signals_ms = api_get(BOT_MULTISYMBOL_URL, "/api/signals")
+        if signals_ms:
+            st.markdown('<div class="section-title">📡 Signaux Récents</div>', unsafe_allow_html=True)
+            df_sig_ms = pd.DataFrame(signals_ms)
+            sig_cols = [c for c in ['timestamp', 'symbol', 'signal', 'price', 'strength', 'executed', 'reason'] if c in df_sig_ms.columns]
+            if sig_cols:
+                st.dataframe(df_sig_ms[sig_cols].tail(10), use_container_width=True, hide_index=True)
+
+        # Charts for Multi-Symbol
+        if trades_ms:
+            st.markdown('<div class="section-title">📊 Performance par Symbole</div>', unsafe_allow_html=True)
+            ms_stats = calculate_stats(trades_ms)
+            if ms_stats:
+                df_stats_ms = pd.DataFrame.from_dict(ms_stats, orient='index').reset_index().rename(columns={'index': 'symbol'})
+                
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    fig_wr = px.bar(df_stats_ms, x='symbol', y='win_rate', title="Winning Rate % per Symbol",
+                                   color='win_rate', color_continuous_scale='Viridis')
+                    fig_wr.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
+                    st.plotly_chart(fig_wr, use_container_width=True)
+                
+                with col_c2:
+                    fig_profit = px.bar(df_stats_ms, x='symbol', y='profit', title="Total Profit USDT per Symbol",
+                                       color='profit', color_continuous_scale='RdYlGn')
+                    fig_profit.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
+                    st.plotly_chart(fig_profit, use_container_width=True)
 
         # Recent trades
         trades = api_get(BOT_MULTISYMBOL_URL, "/api/trades")
@@ -267,6 +359,10 @@ if page == "📊 Live Monitoring":
             cons_loss = data2.get('consecutive_losses', 0)
             cons_cls = "neg" if cons_loss >= 2 else "neutral"
 
+            # Fetch trades to calculate WR and Best Symbol
+            trades_z2 = api_get(BOT_ZONE2_URL, "/api/trades")
+            wr_z2, best_z2 = get_global_stats(trades_z2)
+
             st.markdown(f"""
             <div class="metric-row">
               <div class="metric-card">
@@ -274,15 +370,19 @@ if page == "📊 Live Monitoring":
                 <div class="metric-value {pnl_cls2}">{sign2}{pnl2:.2f} USDT</div>
               </div>
               <div class="metric-card">
-                <div class="metric-label">Positions actives</div>
+                <div class="metric-label">Win Rate</div>
+                <div class="metric-value neutral">{wr_z2:.1f}%</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-label">Best Symbol</div>
+                <div class="metric-value neutral" style="font-size: 16px;">{best_z2}</div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-label">Positions</div>
                 <div class="metric-value neutral">{data2.get('active_count', 0)}</div>
               </div>
               <div class="metric-card">
-                <div class="metric-label">Total Trades</div>
-                <div class="metric-value neutral">{data2.get('total_trades', 0)}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-label">Pertes consécutives</div>
+                <div class="metric-label">Pertes conséc.</div>
                 <div class="metric-value {cons_cls}">{cons_loss}</div>
               </div>
             </div>
@@ -324,6 +424,25 @@ if page == "📊 Live Monitoring":
                 if 'pnl_percent' in df_t2_show.columns:
                     df_t2_show['pnl_percent'] = df_t2_show['pnl_percent'].apply(lambda x: fmt_pnl(float(x)) + "%" if x else "–")
                 st.dataframe(df_t2_show.tail(20), use_container_width=True, hide_index=True)
+
+            # Charts for Zone2
+            st.markdown('<div class="section-title">📊 Performance par Symbole</div>', unsafe_allow_html=True)
+            z2_stats = calculate_stats(trades2)
+            if z2_stats:
+                df_stats_z2 = pd.DataFrame.from_dict(z2_stats, orient='index').reset_index().rename(columns={'index': 'symbol'})
+                
+                col_z1, col_z2 = st.columns(2)
+                with col_z1:
+                    fig_wr2 = px.bar(df_stats_z2, x='symbol', y='win_rate', title="Winning Rate % per Symbol",
+                                    color='win_rate', color_continuous_scale='Viridis')
+                    fig_wr2.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
+                    st.plotly_chart(fig_wr2, use_container_width=True)
+                
+                with col_z2:
+                    fig_profit2 = px.bar(df_stats_z2, x='symbol', y='profit', title="Total Profit USDT per Symbol",
+                                        color='profit', color_continuous_scale='RdYlGn')
+                    fig_profit2.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
+                    st.plotly_chart(fig_profit2, use_container_width=True)
         elif data2:
             st.info("Aucun trade enregistré.")
 
