@@ -317,11 +317,10 @@ def open_trade(symbol, side, price, atr, score):
             print(f"🚫 [{symbol}] Position déjà ouverte sur {open_sym} (même base: {base}), ouverture annulée.")
             return
 
-    # Frais Bybit (Maker/Taker) sont d'environ 0.055% par ordre = 0.11% A/R
-    # On force le TP à être au moins à 0.20% du prix pour couvrir les frais et faire du profit
-    min_tp_dist = price * 0.0020
-    # On force le SL à être au moins à 0.10% pour ne pas couper avec le bruit
-    min_sl_dist = price * 0.0010
+    # On force le TP à être au moins à 0.50% du prix pour couvrir les frais et faire du profit
+    min_tp_dist = price * 0.0050
+    # On force le SL à être au moins à 0.30% pour ne pas couper avec le bruit
+    min_sl_dist = price * 0.0030
     
     sl_dist = max(atr * CURRENT_SL_MULTI, min_sl_dist)
     tp_dist = max(atr * CURRENT_TP_MULTI, min_tp_dist)

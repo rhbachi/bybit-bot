@@ -20,10 +20,10 @@ class AutoTuner:
         self.param_grid = [
             {'sl_multi': 1.5, 'tp_multi': 3.0, 'threshold': 3},
             {'sl_multi': 2.0, 'tp_multi': 4.0, 'threshold': 3},
-            {'sl_multi': 1.0, 'tp_multi': 2.0, 'threshold': 4}
+            {'sl_multi': 1.2, 'tp_multi': 2.4, 'threshold': 4}
         ]
 
-    def fetch_historical_data(self, symbol, timeframe, hours=4):
+    def fetch_historical_data(self, symbol, timeframe, hours=24):
         """Fetch historical OHLCV data for backtesting."""
         try:
             # Estimate number of candles based on timeframe
@@ -101,7 +101,7 @@ class AutoTuner:
 
     def get_best_configuration(self, symbol, timeframe):
         """Determine the best strategy and parameters based on recent data."""
-        df = self.fetch_historical_data(symbol, timeframe, hours=4)
+        df = self.fetch_historical_data(symbol, timeframe, hours=24)
         if df.empty or len(df) < 200:
             return None # Not enough data
             

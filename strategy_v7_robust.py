@@ -4,8 +4,8 @@ import numpy as np
 def apply_indicators(df):
     df = df.copy()
     
-    # 1. EMA 200 - Filtre de tendance long terme
-    df["ema200"] = df.close.ewm(span=200, adjust=False).mean()
+    # 1. EMA 100 - Plus réactive que EMA 200 pour entrer plus tôt
+    df["ema_trend"] = df.close.ewm(span=100, adjust=False).mean()
     
     # 2. MACD (12, 26, 9)
     ema_fast = df.close.ewm(span=12, adjust=False).mean()
@@ -20,12 +20,28 @@ def apply_indicators(df):
     rs = gain / loss
     df["rsi"] = 100 - (100 / (1 + rs))
     
-    # 4. ATR (14) pour SL/TP
-    tr1 = df.high - df.low
-    tr2 = abs(df.high - df.close.shift())
-    tr3 = abs(df.low - df.close.shift())
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    # 4. ADX (14) - Force de la tendance
+    # High-Low, High-PrevClose, Low-PrevClose
+    tr = pd.concat([
+        df.high - df.low,
+        (df.high - df.close.shift()).abs(),
+        (df.low - df.close.shift()).abs()
+    ], axis=1).max(axis=1)
     df["atr"] = tr.rolling(window=14).mean()
+    
+    up_move = df.high.diff()
+    down_move = df.low.diff()
+    
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+    
+    atr_smooth = df["atr"].replace(0, np.nan)
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(14).mean() / atr_smooth
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(14).mean() / atr_smooth
+    
+    denom = (plus_di + minus_di).replace(0, np.nan)
+    dx = 100 * (abs(plus_di - minus_di) / denom).fillna(0)
+    df["adx"] = dx.rolling(14).mean()
     
     # 5. Volume MA
     df["vol_ma"] = df.volume.rolling(20).mean()
@@ -34,12 +50,13 @@ def apply_indicators(df):
 
 def check_signal(df):
     """
-    Stratégie Robuste Triple Confirmation :
-    - Tendance : Prix vs EMA 200
+    Stratégie V8 - Entrée Précoce & Filtres d'Épuisement :
+    - Tendance : Prix vs EMA 100 (plus rapide)
     - Momentum : MACD Crossover
-    - Force : RSI > 50 (Long) ou RSI < 50 (Short)
+    - Force : ADX > 20 (tendance établie)
+    - Filtre Épuisement : RSI LONG [50-65], RSI SHORT [35-50]
     """
-    if len(df) < 200: # Besoin de 200 bougies pour l'EMA200
+    if len(df) < 100:
         return None, 0, 0
         
     last = df.iloc[-1]
@@ -48,34 +65,41 @@ def check_signal(df):
     signal = None
     score = 0
     
+    # S'assurer que l'ADX est calculé
+    if pd.isna(last.get('adx', np.nan)) or last.adx < 20:
+        return None, 0, last.atr
+        
     # --- CONDITION LONG ---
-    # 1. Tendance : Prix au-dessus EMA 200
-    if last.close > last.ema200:
-        # 2. Momentum : Croisement MACD haussier (sur les 2 dernières bougies)
+    # 1. Tendance : Prix au-dessus EMA 100
+    if last.close > last.ema_trend:
+        # 2. Momentum : Croisement MACD haussier
         macd_cross = (prev.macd <= prev.macd_signal and last.macd > last.macd_signal)
         
-        # 3. Force : RSI > 50
-        rsi_bullish = last.rsi > 50
+        # 3. Zone de sécurité RSI (on n'entre pas si déjà en sur-achat > 65)
+        rsi_safe = 50 < last.rsi < 65
         
-        if macd_cross and rsi_bullish:
+        if macd_cross and rsi_safe:
             signal = "long"
             score = 3
             
     # --- CONDITION SHORT ---
-    # 1. Tendance : Prix en-dessous EMA 200
-    elif last.close < last.ema200:
+    # 1. Tendance : Prix en-dessous EMA 100
+    elif last.close < last.ema_trend:
         # 2. Momentum : Croisement MACD baissier
         macd_cross = (prev.macd >= prev.macd_signal and last.macd < last.macd_signal)
         
-        # 3. Force : RSI < 50
-        rsi_bearish = last.rsi < 50
+        # 3. Zone de sécurité RSI (on n'entre pas si déjà en sur-vente < 35)
+        rsi_safe = 35 < last.rsi < 50
         
-        if macd_cross and rsi_bearish:
+        if macd_cross and rsi_safe:
             signal = "short"
             score = 3
             
-    # Bonus Volume
-    if signal and last.volume > last.vol_ma:
-        score += 1
-        
+    # Bonus Volume & Trend Strength
+    if signal:
+        if last.volume > last.vol_ma:
+            score += 1
+        if last.adx > 30: # Tendance forte
+            score += 1
+            
     return signal, score, last.atr
