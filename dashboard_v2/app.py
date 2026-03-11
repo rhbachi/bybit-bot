@@ -8,7 +8,15 @@ if "streamlit" not in sys.argv[0] and "-m" not in sys.argv:
     # Force the path to be dashboard_v2 to avoid launching the old dashboard by mistake
     target_app = "dashboard_v2/app.py" if os.path.exists("dashboard_v2/app.py") else sys.argv[0]
     
-    os.execv(sys.executable, ["python", "-m", "streamlit", "run", target_app, "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"])
+    # Coolify passes the expected port in the PORT env var. Default to 8501 if not set.
+    port = os.environ.get("PORT", "8501")
+    
+    os.execv(sys.executable, ["python", "-m", "streamlit", "run", target_app, 
+                              f"--server.port={port}", 
+                              "--server.address=0.0.0.0", 
+                              "--server.headless=true",
+                              "--server.enableCORS=false",
+                              "--server.enableXsrfProtection=false"])
 import streamlit as st
 import pandas as pd
 import requests
