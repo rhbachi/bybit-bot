@@ -1,3 +1,11 @@
+import sys
+import os
+
+# AUTO-LAUNCHER: Force Streamlit execution if ran via `python app.py`
+if "streamlit" not in sys.argv[0] and "-m" not in sys.argv:
+    print(f"Auto-relaunching Dashboard via Streamlit...", flush=True)
+    os.execv(sys.executable, ["python", "-m", "streamlit", "run", sys.argv[0], "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"])
+
 import streamlit as st
 import pandas as pd
 import requests
