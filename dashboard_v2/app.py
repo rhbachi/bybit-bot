@@ -25,10 +25,6 @@ if "run_scan" not in st.session_state:
 BOT_MULTISYMBOL_URL = os.environ.get("BOT_MULTISYMBOL_URL", "http://127.0.0.1:5001")
 BOT_ZONE2_URL = os.environ.get("BOT_ZONE2_URL", "http://127.0.0.1:5002")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-try:
-    import config
-except ImportError:
-    pass
 
 # ==========================================================
 # CSS GLOBAL — RESPONSIVE + DARK THEME

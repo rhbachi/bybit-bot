@@ -1,7 +1,7 @@
 import os
 import ccxt
 
-print("⚙️ CONFIG START", flush=True)
+# print("⚙️ CONFIG READY", flush=True)
 
 # =========================
 # API KEYS
