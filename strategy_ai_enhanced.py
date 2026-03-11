@@ -154,8 +154,8 @@ def calculate_sl_tp_adaptive(entry_price, side, df):
     atr = df['atr'].iloc[-1]
     atr_pct = atr / entry_price
 
-    sl_multiplier = float(os.getenv('SL_ATR_MULTIPLIER', '1.5'))
-    tp_multiplier = float(os.getenv('TP_ATR_MULTIPLIER', '3.0'))
+    sl_multiplier = float(os.getenv('SL_ATR_MULTIPLIER', '1.2'))
+    tp_multiplier = float(os.getenv('TP_ATR_MULTIPLIER', '1.8'))
 
     sl_distance = atr * sl_multiplier
     tp_distance = atr * tp_multiplier

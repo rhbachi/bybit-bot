@@ -9,6 +9,7 @@ from datetime import datetime
 from config import *
 from flask import Flask, jsonify
 from notifier import send_telegram
+from strategy_v9_scalper import apply_indicators as apply_v9, check_signal as check_v9
 from strategy_v7_robust import apply_indicators as apply_v7, check_signal as check_v7
 from strategy_v6 import apply_indicators as apply_v6, check_signal as check_v6
 from auto_tuner import AutoTuner
@@ -25,7 +26,7 @@ last_trade_time = {}
 active_positions = {} # {symbol: trade_data}
 
 # Active Strategy Settings
-ACTIVE_STRATEGY = 'v7_robust'
+ACTIVE_STRATEGY = 'v9_scalper'
 CURRENT_SL_MULTI = SL_ATR_MULTIPLIER
 CURRENT_TP_MULTI = TP_ATR_MULTIPLIER
 CURRENT_THRESHOLD = SCORE_THRESHOLD
@@ -317,7 +318,7 @@ def open_trade(symbol, side, price, atr, score):
             print(f"🚫 [{symbol}] Position déjà ouverte sur {open_sym} (même base: {base}), ouverture annulée.")
             return
 
-    # On force le TP à être au moins à 0.50% du prix pour couvrir les frais et faire du profit
+    # On force le TP à être au moins à 0.50% du prix pour couvrir les frais (0.075%) et faire du profit
     min_tp_dist = price * 0.0050
     # On force le SL à être au moins à 0.30% pour ne pas couper avec le bruit
     min_sl_dist = price * 0.0030
@@ -352,11 +353,12 @@ def open_trade(symbol, side, price, atr, score):
 
     try:
         # Configuration SL/TP optimisée pour Bybit V5 (Linear)
+        # TP en LIMIT pour économiser 64% de frais
         params = {
             "takeProfit": str(round(tp, 4)),
             "stopLoss": str(round(sl, 4)),
             "tpslMode": "Full",
-            "tpOrderType": "Market",
+            "tpOrderType": "Limit",
             "slOrderType": "Market",
             "positionIdx": 0
         }
@@ -427,10 +429,13 @@ def bot_loop():
                 if df.empty:
                     continue
 
-                if ACTIVE_STRATEGY == 'v6_aggressive':
+                if ACTIVE_STRATEGY == 'v9_scalper':
+                    df = apply_v9(df)
+                    signal, score, atr = check_v9(df)
+                elif ACTIVE_STRATEGY == 'v6_aggressive':
                     df = apply_v6(df)
                     signal, score, atr = check_v6(df)
-                else: # Default robust
+                else: # Default robust v7
                     df = apply_v7(df)
                     signal, score, atr = check_v7(df)
                 
