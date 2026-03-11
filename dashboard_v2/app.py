@@ -408,24 +408,49 @@ def render_live_monitoring(refresh_rate):
 
 def render_market_scanner():
     st.title("📡 Live Market Scanner")
-    st.markdown("Scanne tous les symboles configurés avec la stratégie V7 Robust.")
+    st.markdown("Scanne une liste de symboles indépendante avec la stratégie V7 Robust.")
     col_l, col_r = st.columns([1, 3])
     with col_l:
         timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h"])
+        
+        # Charger la liste depuis SCANNER_SYMBOLS, fallback vers SYMBOLS du bot
+        _default_scanner_symbols = os.environ.get(
+            "SCANNER_SYMBOLS",
+            "BTC/USDT:USDT,ETH/USDT:USDT,BNB/USDT:USDT,SOL/USDT:USDT,"
+            "XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,"
+            "LINK/USDT:USDT,DOT/USDT:USDT,TRX/USDT:USDT,MATIC/USDT:USDT,"
+            "LTC/USDT:USDT,UNI/USDT:USDT,ATOM/USDT:USDT,FTM/USDT:USDT,"
+            "NEAR/USDT:USDT,APT/USDT:USDT,OP/USDT:USDT,ARB/USDT:USDT"
+        )
+        symbols_text = st.text_area(
+            "Symboles à scanner",
+            value=_default_scanner_symbols,
+            height=200,
+            help="Un symbole par ligne ou séparés par des virgules. Ex: BTC/USDT:USDT"
+        )
+        # Parser les symboles (supporte virgule ou retour à la ligne)
+        scan_symbols = [s.strip() for s in symbols_text.replace("\n", ",").split(",") if s.strip()]
+        st.caption(f"**{len(scan_symbols)} symboles** dans la liste")
+        
         if st.button("🚀 Lancer le scan", type="primary", use_container_width=True):
             st.session_state.run_scan = True
+            st.session_state.scan_symbols_list = scan_symbols
+
     with col_r:
         if st.session_state.get('run_scan'):
             try:
                 from strategy_v7_robust import apply_indicators, check_signal
-                from config import SYMBOLS, exchange
+                from config import exchange
+                
+                # Utiliser la liste sauvegardée lors du clic sur le bouton
+                symbols_to_scan = st.session_state.get('scan_symbols_list', ["BTC/USDT:USDT"])
                 
                 progress = st.progress(0)
                 status = st.empty()
                 results = []
                 
-                for i, symbol in enumerate(SYMBOLS):
-                    status.text(f"Scan {symbol} ({i+1}/{len(SYMBOLS)})...")
+                for i, symbol in enumerate(symbols_to_scan):
+                    status.text(f"Scan {symbol} ({i+1}/{len(symbols_to_scan)})...")
                     try:
                         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=250)
                         if not ohlcv or len(ohlcv) < 100:
@@ -456,7 +481,7 @@ def render_market_scanner():
                         print(f"Error scanning {symbol}: {e}")
                         results.append({"Symbole": symbol, "Signal": "❌ Erreur", "Score": "–", "Prix": "–", "RSI": "–"})
                     
-                    progress.progress((i + 1) / len(SYMBOLS))
+                    progress.progress((i + 1) / len(symbols_to_scan))
                     time.sleep(0.05) # Un peu plus rapide
                 
                 status.text("Scan terminé !")
