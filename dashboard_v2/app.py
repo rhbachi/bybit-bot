@@ -3,9 +3,12 @@ import os
 
 # AUTO-LAUNCHER: Force Streamlit execution if ran via `python app.py`
 if "streamlit" not in sys.argv[0] and "-m" not in sys.argv:
-    print(f"Auto-relaunching Dashboard via Streamlit...", flush=True)
-    os.execv(sys.executable, ["python", "-m", "streamlit", "run", sys.argv[0], "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"])
-
+    print(f"Auto-relaunching Dashboard V2 via Streamlit...", flush=True)
+    
+    # Force the path to be dashboard_v2 to avoid launching the old dashboard by mistake
+    target_app = "dashboard_v2/app.py" if os.path.exists("dashboard_v2/app.py") else sys.argv[0]
+    
+    os.execv(sys.executable, ["python", "-m", "streamlit", "run", target_app, "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"])
 import streamlit as st
 import pandas as pd
 import requests
