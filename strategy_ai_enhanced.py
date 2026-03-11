@@ -95,28 +95,49 @@ def check_signal(df):
     last = df.iloc[-1]
     price = last['close']
 
-    # Étape 1 : FVG récent
+    # Étape 1 : Tendance globale (Hard Filter)
+    trend = detect_trend(df)
+    if not trend:
+        logger.info("Tendance indéfinie")
+        return None
+
+    # Étape 2 : FVG récent
     fvg = detect_recent_fvg(df, lookback=15)
     if not fvg:
         logger.info("Pas de FVG récent détecté")
         return None
 
     direction, fvg_low, fvg_high = fvg
-    logger.info("FVG %s détecté: [%.2f - %.2f]", direction, fvg_low, fvg_high)
-
-    # Étape 2 : Prix dans zone Fibonacci 50%-61.8%
-    fib_low, fib_high = fib_zone(df, lookback=30)
-    if fib_low is None:
-        logger.info("Impossible de calculer la zone Fibonacci")
+    
+    # Validation direction vs tendance
+    if direction != trend:
+        logger.info("FVG %s opposé à la tendance %s", direction, trend)
         return None
 
-    if not (fib_low <= price <= fib_high):
-        logger.info("Prix %.2f hors zone Fibonacci [%.2f - %.2f]", price, fib_low, fib_high)
-        return None
+    logger.info("FVG %s aligné avec tendance: [%.2f - %.2f]", direction, fvg_low, fvg_high)
 
-    logger.info("Prix dans zone Fibonacci [%.2f - %.2f]", fib_low, fib_high)
+    # Étape 3 : Fibonacci (Discount pour Long, Premium pour Short)
+    # On regarde si on est au bon prix relatif au range récent (lookback 30)
+    swing_high = df['high'].iloc[-30:].max()
+    swing_low = df['low'].iloc[-30:].min()
+    diff = swing_high - swing_low
+    
+    if direction == 'long':
+        # Zone Discount : on veut acheter SOUS les 50% du move
+        max_price = swing_high - 0.5 * diff
+        if price > max_price:
+            logger.info("Prix %.2f trop cher pour un Long (Premium Zone > %.2f)", price, max_price)
+            return None
+        logger.info("Prix dans zone Discount (<= %.2f)", max_price)
+    else:
+        # Zone Premium : on veut vendre AU-DESSUS des 50% du move
+        min_price = swing_low + 0.5 * diff
+        if price < min_price:
+            logger.info("Prix %.2f trop bas pour un Short (Discount Zone < %.2f)", price, min_price)
+            return None
+        logger.info("Prix dans zone Premium (>= %.2f)", min_price)
 
-    # Étape 3 : Confirmation momentum (MACD ou RSI)
+    # Étape 4 : Confirmation momentum (MACD ou RSI)
     if direction == 'long':
         macd_ok = last['macd'] > last['macd_signal']
         rsi_ok = 40 < last['rsi'] < 70
