@@ -131,51 +131,6 @@ def login_page():
                 st.error("❌ Identifiants incorrects.")
 
 # ==========================================================
-# MAIN APP WRAPPER
-# ==========================================================
-def main():
-    try:
-        if not check_auth():
-            login_page()
-            st.stop()
-
-        # ==========================================================
-        # SIDEBAR
-        # ==========================================================
-        st.sidebar.title("🤖 Bots Dashboard V2")
-        page = st.sidebar.radio(
-            "Navigation",
-            ["📊 Live Monitoring", "📡 Market Scanner", "🧪 Visual Backtester"]
-        )
-        st.sidebar.markdown("---")
-
-        if page == "📊 Live Monitoring":
-            refresh_rate = st.sidebar.slider("Auto-Refresh (sec)", 5, 60, 10)
-
-        st.sidebar.markdown("---")
-        st.sidebar.caption(f"👤 Connecté : **{ADMIN_USERNAME}**")
-        if st.sidebar.button("🔒 Se Déconnecter"):
-            st.session_state.authenticated = False
-            st.rerun()
-
-        # Render Page
-        if page == "📊 Live Monitoring":
-            render_live_monitoring(refresh_rate)
-        elif page == "📡 Market Scanner":
-            render_market_scanner()
-        elif page == "🧪 Visual Backtester":
-            render_visual_backtester()
-
-    except Exception as e:
-        st.error(f"⚠️ Une erreur critique est survenue : {e}")
-        if st.button("Réinitialiser le Dashboard"):
-            st.rerun()
-
-def render_live_monitoring(refresh_rate):
-    tab1, tab2 = st.tabs(["🌐 Multi-Symbol Bot", "🎯 Zone 2 AI Bot (FVG+Fib)"])
-
-
-# ==========================================================
 # HELPERS
 # ==========================================================
 def api_get(url, path, timeout=3):
@@ -200,13 +155,6 @@ def fmt_pnl(val):
     except Exception:
         return str(val)
 
-def color_result(val):
-    if str(val).upper() in ("WIN", "LONG"):
-        return "color: #00FF88"
-    if str(val).upper() in ("LOSS", "SHORT"):
-        return "color: #FF4B4B"
-    return ""
-
 def calculate_stats(trades):
     if not trades:
         return None
@@ -216,17 +164,13 @@ def calculate_stats(trades):
     
     stats = {}
     if 'symbol' in df.columns and 'pnl_usdt' in df.columns:
-        # Convert pnl_usdt to numeric
         df['pnl_usdt'] = pd.to_numeric(df['pnl_usdt'], errors='coerce').fillna(0)
-        
-        # Group by symbol
         for symbol, group in df.groupby('symbol'):
             wins = len(group[group['pnl_usdt'] > 0])
             total = len(group)
             wr = (wins / total * 100) if total > 0 else 0
             profit = group['pnl_usdt'].sum()
             stats[symbol] = {'win_rate': wr, 'profit': profit, 'trades': total}
-            
     return stats
 
 def get_global_stats(trades):
@@ -236,7 +180,6 @@ def get_global_stats(trades):
     if df.empty:
         return 0, "N/A"
     
-    # Global Win Rate
     if 'pnl_usdt' in df.columns:
         df['pnl_usdt'] = pd.to_numeric(df['pnl_usdt'], errors='coerce').fillna(0)
         wins = len(df[df['pnl_usdt'] > 0])
@@ -244,25 +187,19 @@ def get_global_stats(trades):
     else:
         wr = 0
         
-    # Best Symbol
     stats = calculate_stats(trades)
     best_sym = "N/A"
     if stats:
         best_sym = max(stats, key=lambda x: stats[x]['profit'])
-        
     return wr, best_sym
 
+# ==========================================================
+# RENDER FUNCTIONS
+# ==========================================================
+def render_live_monitoring(refresh_rate):
+    st.title("📊 Live Bots Monitoring")
+    tab1, tab2 = st.tabs(["🌐 Multi-Symbol Bot", "🎯 Zone 2 AI Bot (FVG+Fib)"])
 
-    # Auto-refresh logic (Improved)
-    if refresh_rate > 0:
-        time.sleep(refresh_rate)
-        st.rerun()
-
-def render_market_scanner():
-    st.title("📡 Live Market Scanner")
-    st.markdown("Scanne tous les symboles configurés avec la stratégie V7 Robust.")
-
-    # ── Tab 1: Multi-Symbol Bot ──────────────────────────────
     with tab1:
         trades_ms = api_get(BOT_MULTISYMBOL_URL, "/api/trades")
         data = api_get(BOT_MULTISYMBOL_URL, "/api/status")
@@ -275,7 +212,6 @@ def render_market_scanner():
             pnl_cls = "neg" if pnl < 0 else ""
             sign = "+" if pnl >= 0 else ""
 
-            # Calculate WR and Best Symbol from already fetched trades
             wr_ms, best_ms = get_global_stats(trades_ms)
 
             st.markdown(f"""
@@ -313,7 +249,6 @@ def render_market_scanner():
         else:
             st.error(f"❌ Multi-Symbol API hors ligne ({BOT_MULTISYMBOL_URL})")
 
-        # Open Positions Multi-Symbol
         positions_ms = api_get(BOT_MULTISYMBOL_URL, "/api/positions")
         if positions_ms:
             st.markdown('<div class="section-title">📍 Positions Ouvertes</div>', unsafe_allow_html=True)
@@ -324,7 +259,6 @@ def render_market_scanner():
         elif data:
             st.info("Aucune position ouverte.")
 
-        # Recent Signals Multi-Symbol
         signals_ms = api_get(BOT_MULTISYMBOL_URL, "/api/signals")
         if signals_ms:
             st.markdown('<div class="section-title">📡 Signaux Récents</div>', unsafe_allow_html=True)
@@ -333,27 +267,21 @@ def render_market_scanner():
             if sig_cols:
                 st.dataframe(df_sig_ms[sig_cols].tail(10), use_container_width=True, hide_index=True)
 
-        # Charts for Multi-Symbol
         if trades_ms:
             st.markdown('<div class="section-title">📊 Performance par Symbole</div>', unsafe_allow_html=True)
             ms_stats = calculate_stats(trades_ms)
             if ms_stats:
                 df_stats_ms = pd.DataFrame.from_dict(ms_stats, orient='index').reset_index().rename(columns={'index': 'symbol'})
-                
                 col_c1, col_c2 = st.columns(2)
                 with col_c1:
-                    fig_wr = px.bar(df_stats_ms, x='symbol', y='win_rate', title="Winning Rate % per Symbol",
-                                   color='win_rate', color_continuous_scale='Viridis')
+                    fig_wr = px.bar(df_stats_ms, x='symbol', y='win_rate', title="Winning Rate % per Symbol", color='win_rate', color_continuous_scale='Viridis')
                     fig_wr.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
                     st.plotly_chart(fig_wr, use_container_width=True)
-                
                 with col_c2:
-                    fig_profit = px.bar(df_stats_ms, x='symbol', y='profit', title="Total Profit USDT per Symbol",
-                                       color='profit', color_continuous_scale='RdYlGn')
+                    fig_profit = px.bar(df_stats_ms, x='symbol', y='profit', title="Total Profit USDT per Symbol", color='profit', color_continuous_scale='RdYlGn')
                     fig_profit.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
                     st.plotly_chart(fig_profit, use_container_width=True)
 
-        # Recent trades
         if trades_ms:
             st.markdown('<div class="section-title">📋 Trades Récents</div>', unsafe_allow_html=True)
             df_t = pd.DataFrame(trades_ms)
@@ -365,10 +293,7 @@ def render_market_scanner():
                 if 'pnl_percent' in df_show.columns:
                     df_show['pnl_percent'] = df_show['pnl_percent'].apply(lambda x: fmt_pnl(float(x)) + "%" if x else "–")
                 st.dataframe(df_show.tail(20), use_container_width=True, hide_index=True)
-        elif data:
-            st.info("Aucun trade enregistré.")
 
-    # ── Tab 2: Zone2 AI Bot ──────────────────────────────────
     with tab2:
         trades_z2 = api_get(BOT_ZONE2_URL, "/api/trades")
         data2 = api_get(BOT_ZONE2_URL, "/api/status")
@@ -376,14 +301,12 @@ def render_market_scanner():
         if data2:
             mode_badge = '<span class="badge badge-yellow">📝 PAPER</span>' if data2.get('paper_mode') else '<span class="badge badge-green">💰 LIVE</span>'
             st.markdown(f"**Statut** : <span class='badge badge-green'>● En ligne</span> &nbsp; {mode_badge}", unsafe_allow_html=True)
-
             pnl2 = data2.get('daily_pnl', 0)
             pnl_cls2 = "neg" if pnl2 < 0 else ""
             sign2 = "+" if pnl2 >= 0 else ""
             cons_loss = data2.get('consecutive_losses', 0)
             cons_cls = "neg" if cons_loss >= 2 else "neutral"
 
-            # Calculate WR and Best Symbol from already fetched trades
             wr_z2, best_z2 = get_global_stats(trades_z2)
 
             st.markdown(f"""
@@ -413,7 +336,6 @@ def render_market_scanner():
         else:
             st.error(f"❌ Zone2 API hors ligne ({BOT_ZONE2_URL})")
 
-        # Positions ouvertes
         positions = api_get(BOT_ZONE2_URL, "/api/positions")
         if positions:
             st.markdown('<div class="section-title">📍 Positions Ouvertes</div>', unsafe_allow_html=True)
@@ -424,17 +346,14 @@ def render_market_scanner():
         elif data2:
             st.info("Aucune position ouverte.")
 
-        # Signaux récents
         signals = api_get(BOT_ZONE2_URL, "/api/signals")
         if signals:
             st.markdown('<div class="section-title">📡 Signaux FVG+Fibonacci Récents</div>', unsafe_allow_html=True)
             df_sig = pd.DataFrame(signals)
             sig_cols = [c for c in ['timestamp', 'bot', 'signal', 'price', 'strength', 'executed', 'reason'] if c in df_sig.columns]
             if sig_cols:
-                df_sig_show = df_sig[sig_cols].tail(20)
-                st.dataframe(df_sig_show, use_container_width=True, hide_index=True)
+                st.dataframe(df_sig[sig_cols].tail(20), use_container_width=True, hide_index=True)
 
-        # Trades récents
         if trades_z2:
             st.markdown('<div class="section-title">📋 Trades Récents</div>', unsafe_allow_html=True)
             df_t2 = pd.DataFrame(trades_z2)
@@ -447,207 +366,131 @@ def render_market_scanner():
                     df_t2_show['pnl_percent'] = df_t2_show['pnl_percent'].apply(lambda x: fmt_pnl(float(x)) + "%" if x else "–")
                 st.dataframe(df_t2_show.tail(20), use_container_width=True, hide_index=True)
 
-            # Charts for Zone2
             st.markdown('<div class="section-title">📊 Performance par Symbole</div>', unsafe_allow_html=True)
             z2_stats = calculate_stats(trades_z2)
             if z2_stats:
                 df_stats_z2 = pd.DataFrame.from_dict(z2_stats, orient='index').reset_index().rename(columns={'index': 'symbol'})
-                
                 col_z1, col_z2 = st.columns(2)
                 with col_z1:
-                    fig_wr2 = px.bar(df_stats_z2, x='symbol', y='win_rate', title="Winning Rate % per Symbol",
-                                    color='win_rate', color_continuous_scale='Viridis')
+                    fig_wr2 = px.bar(df_stats_z2, x='symbol', y='win_rate', title="Winning Rate % per Symbol", color='win_rate', color_continuous_scale='Viridis')
                     fig_wr2.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
                     st.plotly_chart(fig_wr2, use_container_width=True)
-                
                 with col_z2:
-                    fig_profit2 = px.bar(df_stats_z2, x='symbol', y='profit', title="Total Profit USDT per Symbol",
-                                        color='profit', color_continuous_scale='RdYlGn')
+                    fig_profit2 = px.bar(df_stats_z2, x='symbol', y='profit', title="Total Profit USDT per Symbol", color='profit', color_continuous_scale='RdYlGn')
                     fig_profit2.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
                     st.plotly_chart(fig_profit2, use_container_width=True)
-        elif data2:
-            st.info("Aucun trade enregistré.")
 
-    # Auto-refresh logic (Improved)
     if refresh_rate > 0:
         time.sleep(refresh_rate)
         st.rerun()
 
-
-            st.dataframe(df_results, use_container_width=True, hide_index=True)
-            st.session_state.run_scan = False
-
-def render_visual_backtester():
-    st.title("🧪 Visual Strategy Backtester")
-
+def render_market_scanner():
+    st.title("📡 Live Market Scanner")
+    st.markdown("Scanne tous les symboles configurés avec la stratégie V7 Robust.")
     col_l, col_r = st.columns([1, 3])
     with col_l:
         timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h"])
-        run = st.button("🚀 Lancer le scan", type="primary", use_container_width=True)
-        if run:
+        if st.button("🚀 Lancer le scan", type="primary", use_container_width=True):
             st.session_state.run_scan = True
-
     with col_r:
         if st.session_state.get('run_scan'):
             try:
                 from strategy_v7_robust import apply_indicators, check_signal
                 from config import SYMBOLS, exchange
-            except ImportError as e:
-                st.error(f"Import impossible : {e}")
-                st.stop()
+                progress = st.progress(0)
+                status = st.empty()
+                results = []
+                for i, symbol in enumerate(SYMBOLS):
+                    status.text(f"Scan {symbol} ({i+1}/{len(SYMBOLS)})...")
+                    try:
+                        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=250)
+                        df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                        df = apply_indicators(df)
+                        signal, score, atr = check_signal(df)
+                        price = df['close'].iloc[-1]
+                        rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else 0
+                        results.append({"Symbole": symbol, "Signal": "🟢 BUY" if signal == "long" else ("🔴 SELL" if signal == "short" else "⬜ Neutre"), "Score": f"{score}/3" if signal else "–", "Prix": f"{price:.4f}", "RSI": f"{rsi:.1f}"})
+                    except Exception: pass
+                    progress.progress((i + 1) / len(SYMBOLS))
+                    time.sleep(0.1)
+                status.text("Scan terminé !")
+                df_results = pd.DataFrame(results)
+                active = df_results[df_results['Signal'] != "⬜ Neutre"]
+                st.success(f"{len(active)} setup(s) potentiel(s) trouvé(s) sur {len(results)} symboles.")
+                st.dataframe(df_results, use_container_width=True, hide_index=True)
+                st.session_state.run_scan = False
+            except Exception as e:
+                st.error(f"Erreur scan : {e}")
 
-            progress = st.progress(0)
-            status = st.empty()
-            results = []
-
-            for i, symbol in enumerate(SYMBOLS):
-                status.text(f"Scan {symbol} ({i+1}/{len(SYMBOLS)})...")
-                try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=250)
-                    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-                    df = apply_indicators(df)
-                    signal, score, atr = check_signal(df)
-                    price = df['close'].iloc[-1]
-                    rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else 0
-                    results.append({
-                        "Symbole": symbol,
-                        "Signal": "🟢 BUY" if signal == "long" else ("🔴 SELL" if signal == "short" else "⬜ Neutre"),
-                        "Score": f"{score}/3" if signal else "–",
-                        "Prix": f"{price:.4f}",
-                        "RSI": f"{rsi:.1f}",
-                    })
-                except Exception:
-                    pass
-                progress.progress((i + 1) / len(SYMBOLS))
-                time.sleep(0.1)
-
-            status.text("Scan terminé !")
-            df_results = pd.DataFrame(results)
-
-            active = df_results[df_results['Signal'] != "⬜ Neutre"]
-            st.success(f"{len(active)} setup(s) potentiel(s) trouvé(s) sur {len(results)} symboles.")
-            st.dataframe(df_results, use_container_width=True, hide_index=True)
-            st.session_state.run_scan = False
-
-
-                roi_sign = "+" if roi >= 0 else ""
-                if roi >= 0:
-                    st.success(f"Capital final : **${capital:.2f}** ({roi_sign}{roi:.2f}%)")
-                else:
-                    st.error(f"Capital final : **${capital:.2f}** ({roi_sign}{roi:.2f}%)")
-
-        except Exception as e:
-            st.error(f"Erreur simulation : {e}")
-
-if __name__ == "__main__":
-    main()
+def render_visual_backtester():
+    st.title("🧪 Visual Strategy Backtester")
+    with st.form("backtest_form"):
         c1, c2, c3 = st.columns(3)
-        with c1:
-            symbol = st.text_input("Symbole", value="BTC/USDT")
-        with c2:
-            tf = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h", "4h"], index=1)
-        with c3:
-            strat = st.selectbox("Stratégie", ["V6 Aggressive", "V7 Robust"])
-
+        symbol = c1.text_input("Symbole", value="BTC/USDT")
+        tf = c2.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h", "4h"], index=1)
+        strat = c3.selectbox("Stratégie", ["V6 Aggressive", "V7 Robust"])
         p1, p2, p3 = st.columns(3)
-        with p1:
-            sl_m = st.number_input("SL ATR Multiplier", value=1.5, step=0.1)
-        with p2:
-            tp_m = st.number_input("TP ATR Multiplier", value=3.0, step=0.1)
-        with p3:
-            score_th = st.number_input("Score Threshold", value=3, min_value=1, max_value=5)
-
+        sl_m = p1.number_input("SL ATR Multiplier", value=1.5, step=0.1)
+        tp_m = p2.number_input("TP ATR Multiplier", value=3.0, step=0.1)
+        score_th = p3.number_input("Score Threshold", value=3, min_value=1, max_value=5)
         submitted = st.form_submit_button("▶️ Lancer la simulation", type="primary", use_container_width=True)
-
     if submitted:
         try:
             from config import exchange
             from auto_tuner import AutoTuner
-            import plotly.graph_objects as go
-
-            with st.spinner(f"Récupération des données {symbol} ({tf})..."):
+            with st.spinner(f"Récupération données..."):
                 tuner = AutoTuner(exchange, None)
                 df = tuner.fetch_historical_data(symbol, tf, hours=72)
-
-            if df is None or df.empty:
-                st.error("Impossible de récupérer les données.")
-            else:
+            if df is not None and not df.empty:
                 strat_name = 'v6_aggressive' if strat == "V6 Aggressive" else 'v7_robust'
                 p = {'sl_multi': sl_m, 'tp_multi': tp_m, 'threshold': score_th}
-
                 apply_ind, check_sig = tuner.strategies[strat_name]
                 df = apply_ind(df)
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-
-                buy_x, buy_y, sell_x, sell_y = [], [], [], []
-                capital = 1000.0
-                equity_curve = [capital]
-                time_axis = [df['timestamp'].iloc[0]]
-
+                buy_x, buy_y, sell_x, sell_y, capital = [], [], [], [], 1000.0
+                equity_curve, time_axis = [capital], [df['timestamp'].iloc[0]]
                 start_idx = 200 if strat_name == 'v7_robust' else 25
-
-                with st.spinner("Simulation en cours..."):
-                    for i in range(start_idx, len(df) - 1):
-                        slice_df = df.iloc[:i+1]
-                        signal, score, atr = check_sig(slice_df)
-                        if signal and score >= p['threshold']:
-                            outcome = tuner.simulate_trade(df, i, signal, p)
-                            if outcome != 0:
-                                trade_pnl = outcome * atr * (capital * 0.02 / (atr * p['sl_multi']))
-                                capital += trade_pnl
-                                if signal == 'long':
-                                    buy_x.append(df['timestamp'].iloc[i])
-                                    buy_y.append(df['close'].iloc[i])
-                                else:
-                                    sell_x.append(df['timestamp'].iloc[i])
-                                    sell_y.append(df['close'].iloc[i])
-                                equity_curve.append(capital)
-                                time_axis.append(df['timestamp'].iloc[i])
-
-                # Candlestick chart
-                st.subheader("📊 Price Action & Signaux")
-                fig = go.Figure(data=[go.Candlestick(
-                    x=df['timestamp'], open=df['open'], high=df['high'],
-                    low=df['low'], close=df['close'], name='Prix'
-                )])
-                if buy_x:
-                    fig.add_trace(go.Scatter(x=buy_x, y=buy_y, mode='markers',
-                        marker=dict(symbol='triangle-up', size=12, color='#00FF88'), name='BUY'))
-                if sell_x:
-                    fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode='markers',
-                        marker=dict(symbol='triangle-down', size=12, color='#FF4B4B'), name='SELL'))
-
-                fig.update_layout(
-                    template="plotly_dark", height=500,
-                    margin=dict(l=0, r=0, t=30, b=0),
-                    xaxis_rangeslider_visible=False,
-                    paper_bgcolor='#0F0F17', plot_bgcolor='#0F0F17'
-                )
+                for i in range(start_idx, len(df) - 1):
+                    slice_df = df.iloc[:i+1]
+                    signal, score, atr = check_sig(slice_df)
+                    if signal and score >= p['threshold']:
+                        outcome = tuner.simulate_trade(df, i, signal, p)
+                        if outcome != 0:
+                            capital += outcome * atr * (capital * 0.02 / (atr * p['sl_multi']))
+                            if signal == 'long': buy_x.append(df['timestamp'].iloc[i]); buy_y.append(df['close'].iloc[i])
+                            else: sell_x.append(df['timestamp'].iloc[i]); sell_y.append(df['close'].iloc[i])
+                            equity_curve.append(capital)
+                            time_axis.append(df['timestamp'].iloc[i])
+                st.subheader("📊 Price Action")
+                fig = go.Figure(data=[go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Prix')])
+                if buy_x: fig.add_trace(go.Scatter(x=buy_x, y=buy_y, mode='markers', marker=dict(symbol='triangle-up', size=12, color='#00FF88'), name='BUY'))
+                if sell_x: fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode='markers', marker=dict(symbol='triangle-down', size=12, color='#FF4B4B'), name='SELL'))
                 st.plotly_chart(fig, use_container_width=True)
-
-                # Equity curve
-                st.subheader("💰 Courbe d'Équité (départ $1000, risque 2%)")
                 roi = ((capital / 1000) - 1) * 100
-                line_color = '#00FF88' if roi >= 0 else '#FF4B4B'
-                fig_eq = go.Figure(data=[go.Scatter(
-                    x=time_axis, y=equity_curve, mode='lines',
-                    line=dict(color=line_color, width=2), fill='tozeroy',
-                    fillcolor='rgba(0,255,136,0.07)' if roi >= 0 else 'rgba(255,75,75,0.07)'
-                )])
-                fig_eq.update_layout(
-                    template="plotly_dark", height=280,
-                    margin=dict(l=0, r=0, t=10, b=0),
-                    paper_bgcolor='#0F0F17', plot_bgcolor='#0F0F17'
-                )
-                st.plotly_chart(fig_eq, use_container_width=True)
+                st.metric("ROI Final", f"{roi:.2f}%", delta=f"{capital-1000:.2f} USDT")
+        except Exception as e:
+            st.error(f"Erreur simulation : {e}")
 
-                roi_sign = "+" if roi >= 0 else ""
-                if roi >= 0:
-                    st.success(f"Capital final : **${capital:.2f}** ({roi_sign}{roi:.2f}%)")
-                else:
-                    st.error(f"Capital final : **${capital:.2f}** ({roi_sign}{roi:.2f}%)")
-
-# ... (existing Monitoring, Scanner, Backtester logic remains but wrapped in their respective functions)
+# ==========================================================
+# MAIN LOOP
+# ==========================================================
+def main():
+    try:
+        if not check_auth():
+            login_page()
+            st.stop()
+        st.sidebar.title("🤖 Bots Dash V2")
+        page = st.sidebar.radio("Nav", ["Live", "Scanner", "Backtester"])
+        if page == "Live":
+            rr = st.sidebar.slider("Refresh", 5, 60, 10)
+            render_live_monitoring(rr)
+        elif page == "Scanner":
+            render_market_scanner()
+        elif page == "Backtester":
+            render_visual_backtester()
+    except Exception as e:
+        st.error(f"💥 CRITICAL ERROR: {e}")
+        if st.button("Reload"): st.rerun()
 
 if __name__ == "__main__":
     main()
