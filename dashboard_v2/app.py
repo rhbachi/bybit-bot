@@ -16,7 +16,8 @@ if "streamlit" not in sys.argv[0] and "-m" not in sys.argv:
                               "--server.address=0.0.0.0", 
                               "--server.headless=true",
                               "--server.enableCORS=false",
-                              "--server.enableXsrfProtection=false"])
+                              "--server.enableXsrfProtection=false",
+                              "--server.enableWebsocketCompression=false"])
 import streamlit as st
 import pandas as pd
 import requests
