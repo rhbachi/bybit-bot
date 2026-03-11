@@ -1,4 +1,13 @@
 import streamlit as st
+
+# MUST BE THE FIRST ST COMMAND
+st.set_page_config(
+    page_title="Bybit Bots Dashboard Pro",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 import pandas as pd
 import requests
 import time
@@ -7,21 +16,19 @@ import sys
 import plotly.express as px
 import plotly.graph_objects as go
 
+# Initialization
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "run_scan" not in st.session_state:
+    st.session_state.run_scan = False
+
+BOT_MULTISYMBOL_URL = os.environ.get("BOT_MULTISYMBOL_URL", "http://127.0.0.1:5001")
+BOT_ZONE2_URL = os.environ.get("BOT_ZONE2_URL", "http://127.0.0.1:5002")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     import config
 except ImportError:
     pass
-
-BOT_MULTISYMBOL_URL = os.environ.get("BOT_MULTISYMBOL_URL", "http://127.0.0.1:5001")
-BOT_ZONE2_URL = os.environ.get("BOT_ZONE2_URL", "http://127.0.0.1:5002")
-
-st.set_page_config(
-    page_title="Bybit Bots Dashboard Pro",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 
 # ==========================================================
 # CSS GLOBAL — RESPONSIVE + DARK THEME
@@ -110,7 +117,7 @@ ADMIN_USERNAME = os.environ.get("DASHBOARD_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "bybit2024")
 
 def check_auth():
-    return st.session_state.get("authenticated", False)
+    return st.session_state.authenticated
 
 def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -444,13 +451,10 @@ if page == "📊 Live Monitoring":
         elif data2:
             st.info("Aucun trade enregistré.")
 
-    # Auto-refresh countdown
-    placeholder = st.empty()
-    for remaining in range(refresh_rate, 0, -1):
-        placeholder.caption(f"🔄 Actualisation dans {remaining}s")
-        time.sleep(1)
-    placeholder.empty()
-    st.rerun()
+    # Auto-refresh logic (Improved)
+    if refresh_rate > 0:
+        time.sleep(refresh_rate)
+        st.rerun()
 
 
 # ==========================================================
