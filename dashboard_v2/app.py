@@ -2,8 +2,10 @@ import sys
 import os
 
 # AUTO-LAUNCHER: Force Streamlit execution if ran via `python app.py`
-if "streamlit" not in sys.argv[0] and "-m" not in sys.argv:
+# Use an environment flag to prevent infinite reload loops
+if os.environ.get("STREAMLIT_AUTORUN") != "1":
     print(f"Auto-relaunching Dashboard V2 via Streamlit...", flush=True)
+    os.environ["STREAMLIT_AUTORUN"] = "1"
     
     # Force the path to be dashboard_v2 to avoid launching the old dashboard by mistake
     target_app = "dashboard_v2/app.py" if os.path.exists("dashboard_v2/app.py") else sys.argv[0]
