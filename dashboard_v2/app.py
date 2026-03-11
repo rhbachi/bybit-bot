@@ -419,30 +419,73 @@ def render_market_scanner():
             try:
                 from strategy_v7_robust import apply_indicators, check_signal
                 from config import SYMBOLS, exchange
+                
                 progress = st.progress(0)
                 status = st.empty()
                 results = []
+                
                 for i, symbol in enumerate(SYMBOLS):
                     status.text(f"Scan {symbol} ({i+1}/{len(SYMBOLS)})...")
                     try:
                         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=250)
+                        if not ohlcv or len(ohlcv) < 100:
+                            results.append({"Symbole": symbol, "Signal": "⚠️ Pas assez de données", "Score": "–", "Prix": "–", "RSI": "–"})
+                            continue
+                            
                         df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                        # Sécurité type numérique
+                        for col in ["open", "high", "low", "close", "volume"]:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                            
                         df = apply_indicators(df)
                         signal, score, atr = check_signal(df)
-                        price = df['close'].iloc[-1]
-                        rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else 0
-                        results.append({"Symbole": symbol, "Signal": "🟢 BUY" if signal == "long" else ("🔴 SELL" if signal == "short" else "⬜ Neutre"), "Score": f"{score}/3" if signal else "–", "Prix": f"{price:.4f}", "RSI": f"{rsi:.1f}"})
-                    except Exception: pass
+                        
+                        last_row = df.iloc[-1]
+                        price = last_row['close']
+                        rsi = last_row['rsi'] if 'rsi' in df.columns else 0
+                        
+                        sig_text = "🟢 BUY" if signal == "long" else ("🔴 SELL" if signal == "short" else "⬜ Neutre")
+                        results.append({
+                            "Symbole": symbol, 
+                            "Signal": sig_text, 
+                            "Score": f"{score}/5" if signal else ("0/5" if not pd.isna(last_row.get('adx')) else "–"), 
+                            "Prix": f"{price:.4f}", 
+                            "RSI": f"{rsi:.1f}"
+                        })
+                    except Exception as e:
+                        print(f"Error scanning {symbol}: {e}")
+                        results.append({"Symbole": symbol, "Signal": "❌ Erreur", "Score": "–", "Prix": "–", "RSI": "–"})
+                    
                     progress.progress((i + 1) / len(SYMBOLS))
-                    time.sleep(0.1)
+                    time.sleep(0.05) # Un peu plus rapide
+                
                 status.text("Scan terminé !")
-                df_results = pd.DataFrame(results)
-                active = df_results[df_results['Signal'] != "⬜ Neutre"]
-                st.success(f"{len(active)} setup(s) potentiel(s) trouvé(s) sur {len(results)} symboles.")
-                st.dataframe(df_results, use_container_width=True, hide_index=True)
+                st.session_state.scan_results = results
                 st.session_state.run_scan = False
             except Exception as e:
-                st.error(f"Erreur scan : {e}")
+                st.error(f"Erreur globale scan : {e}")
+                st.session_state.run_scan = False
+
+        # Affichage des résultats s'ils existent en session_state
+        if "scan_results" in st.session_state and st.session_state.scan_results:
+            df_res = pd.DataFrame(st.session_state.scan_results)
+            # Trier : Opportunités en premier
+            if not df_res.empty:
+                # Créer une colonne de tri temporaire
+                def sort_rank(sig):
+                    if "BUY" in sig or "SELL" in sig: return 0
+                    if "Neutre" in sig: return 1
+                    return 2
+                df_res['rank'] = df_res['Signal'].apply(sort_rank)
+                df_res = df_res.sort_values('rank').drop(columns=['rank'])
+                
+                active = df_res[df_res['Signal'].str.contains("BUY|SELL", na=False)]
+                st.success(f"{len(active)} setup(s) potentiel(s) trouvé(s) sur {len(df_res)} symboles.")
+                st.dataframe(df_res, use_container_width=True, hide_index=True)
+                
+                if st.button("🗑️ Effacer les résultats"):
+                    st.session_state.scan_results = []
+                    st.rerun()
 
 def render_visual_backtester():
     st.title("🧪 Visual Strategy Backtester")
