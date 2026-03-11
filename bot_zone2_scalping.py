@@ -107,7 +107,10 @@ def place_sl_tp_orders(symbol, side, qty, entry_price, sl_price, tp_price):
                 'takeProfit': str(tp_price),
                 'tpTriggerBy': 'LastPrice',
                 'slTriggerBy': 'LastPrice',
-                'tpslMode': 'Full',
+                'tpslMode': 'Partial',     # Required for Limit TP
+                'tpSize': str(qty),
+                'slSize': str(qty),
+                'tpLimitPrice': str(round(tp_price, 4)),
                 'tpOrderType': 'Limit',  # ✅ TP en LIMIT (économise 64% fees)
                 'slOrderType': 'Market',  # ✅ SL en MARKET (sécurité)
                 'positionIdx': 0,

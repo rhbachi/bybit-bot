@@ -357,7 +357,10 @@ def open_trade(symbol, side, price, atr, score):
         params = {
             "takeProfit": str(round(tp, 4)),
             "stopLoss": str(round(sl, 4)),
-            "tpslMode": "Full",
+            "tpslMode": "Partial",          # Required for Limit TP
+            "tpSize": str(qty),             # Required for Partial mode
+            "slSize": str(qty),             # Required for Partial mode
+            "tpLimitPrice": str(round(tp, 4)), # Required for Limit TP
             "tpOrderType": "Limit",
             "slOrderType": "Market",
             "positionIdx": 0
