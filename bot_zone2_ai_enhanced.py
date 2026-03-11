@@ -273,16 +273,24 @@ def update_trailing_stop(symbol, side, qty, current_price, current_sl):
             new_sl = max(theoretical_sl, entry_price * 1.001)
 
             if new_sl > current_sl:
-                print(f"📈 [{symbol}] Trailing stop: {current_sl:.2f} → {new_sl:.2f} (Profit sécurisé)", flush=True)
+                print(f"📈 [{symbol}] LONG Trailing stop: {current_sl:.2f} → {new_sl:.2f}", flush=True)
                 if not PAPER_TRADING:
                     try:
-                        exchange.private_post_v5_position_trading_stop({
+                        resp = exchange.private_post_v5_position_trading_stop({
                             'category': 'linear',
                             'symbol': symbol.split(':')[0].replace('/', ''),
-                            'stopLoss': str(new_sl),
+                            'stopLoss': str(round(new_sl, 4)),
                             'slTriggerBy': 'MarkPrice',
+                            'slOrderType': 'Market',
+                            'tpslMode': 'Full',
                             'positionIdx': 0,
                         })
+                        ret_code = resp.get('retCode', -1) if isinstance(resp, dict) else -1
+                        if ret_code == 0:
+                            print(f"✅ [{symbol}] Trailing SL mis à jour sur Bybit: {new_sl:.2f}", flush=True)
+                        else:
+                            print(f"⚠️ [{symbol}] Bybit trailing stop refusé: {resp}", flush=True)
+                            return current_sl
                     except Exception as e:
                         enhanced_logger.log_error(f"Erreur trailing stop {symbol}", e)
                         return current_sl
@@ -299,16 +307,24 @@ def update_trailing_stop(symbol, side, qty, current_price, current_sl):
             new_sl = min(theoretical_sl, entry_price * 0.999)
 
             if new_sl < current_sl:
-                print(f"📈 [{symbol}] Trailing stop: {current_sl:.2f} → {new_sl:.2f} (Profit sécurisé)", flush=True)
+                print(f"📈 [{symbol}] SHORT Trailing stop: {current_sl:.2f} → {new_sl:.2f}", flush=True)
                 if not PAPER_TRADING:
                     try:
-                        exchange.private_post_v5_position_trading_stop({
+                        resp = exchange.private_post_v5_position_trading_stop({
                             'category': 'linear',
                             'symbol': symbol.split(':')[0].replace('/', ''),
-                            'stopLoss': str(new_sl),
+                            'stopLoss': str(round(new_sl, 4)),
                             'slTriggerBy': 'MarkPrice',
+                            'slOrderType': 'Market',
+                            'tpslMode': 'Full',
                             'positionIdx': 0,
                         })
+                        ret_code = resp.get('retCode', -1) if isinstance(resp, dict) else -1
+                        if ret_code == 0:
+                            print(f"✅ [{symbol}] Trailing SL mis à jour sur Bybit: {new_sl:.2f}", flush=True)
+                        else:
+                            print(f"⚠️ [{symbol}] Bybit trailing stop refusé: {resp}", flush=True)
+                            return current_sl
                     except Exception as e:
                         enhanced_logger.log_error(f"Erreur trailing stop {symbol}", e)
                         return current_sl
