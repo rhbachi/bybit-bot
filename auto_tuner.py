@@ -17,10 +17,11 @@ class AutoTuner:
         }
         
         # Define parameter grids to test
+        # Note: SL capped at 1.5x max to limit per-trade risk
         self.param_grid = [
-            {'sl_multi': 1.5, 'tp_multi': 3.0, 'threshold': 3},
-            {'sl_multi': 2.0, 'tp_multi': 4.0, 'threshold': 3},
-            {'sl_multi': 1.2, 'tp_multi': 2.4, 'threshold': 4}
+            {'sl_multi': 1.2, 'tp_multi': 2.4, 'threshold': 4},
+            {'sl_multi': 1.5, 'tp_multi': 3.0, 'threshold': 4},
+            {'sl_multi': 1.2, 'tp_multi': 2.4, 'threshold': 3},
         ]
 
     def fetch_historical_data(self, symbol, timeframe, hours=24):
@@ -51,10 +52,12 @@ class AutoTuner:
             sl_price = entry_price + sl_dist
             tp_price = entry_price - tp_dist
             
-        # Scan forward to see what hits first
-        for i in range(start_index + 1, len(df)):
+        # Scan forward — max 50 candles (realistic trade horizon)
+        max_lookahead = 50
+        end_index = min(start_index + 1 + max_lookahead, len(df))
+        for i in range(start_index + 1, end_index):
             current = df.iloc[i]
-            
+
             if signal == 'long':
                 if current['low'] <= sl_price:
                     return -params['sl_multi'] # Lost SL multiples of ATR
@@ -65,7 +68,7 @@ class AutoTuner:
                     return -params['sl_multi']
                 elif current['low'] <= tp_price:
                     return params['tp_multi']
-                    
+
         return 0 # Trade not closed within the window
 
     def backtest_strategy(self, df, strat_name, params):
@@ -97,42 +100,64 @@ class AutoTuner:
                         wins += 1
                         
         win_rate = (wins / trades_count) * 100 if trades_count > 0 else 0
+        # Require minimum 5 trades for a valid backtest result
+        if trades_count < 5:
+            return -999, 0
         return pnl_atr, win_rate
 
-    def get_best_configuration(self, symbol, timeframe):
-        """Determine the best strategy and parameters based on recent data."""
-        df = self.fetch_historical_data(symbol, timeframe, hours=24)
-        if df.empty or len(df) < 200:
-            return None # Not enough data
-            
+    def get_best_configuration(self, symbols, timeframe):
+        """Determine the best strategy and parameters based on recent data.
+        Backtests on up to 3 symbols and averages results to avoid overfitting."""
+        test_symbols = symbols[:3] if isinstance(symbols, list) else [symbols]
+
         best_pnl = -float('inf')
         best_config = None
-        
         results_log = []
-        
+
         for strat_name in self.strategies.keys():
             for params in self.param_grid:
-                pnl, win_rate = self.backtest_strategy(df, strat_name, params)
-                
-                results_log.append(f"{strat_name} {params}: PnL={pnl:.2f} ATR, WR={win_rate:.1f}%")
-                
-                # We prioritize PnL, but could also combine with Win Rate
-                if pnl > best_pnl:
-                    best_pnl = pnl
+                total_pnl = 0.0
+                total_wr = 0.0
+                valid_count = 0
+
+                for sym in test_symbols:
+                    df = self.fetch_historical_data(sym, timeframe, hours=48)
+                    if df.empty or len(df) < 200:
+                        continue
+                    pnl, win_rate = self.backtest_strategy(df, strat_name, params)
+                    if pnl == -999:
+                        continue
+                    total_pnl += pnl
+                    total_wr += win_rate
+                    valid_count += 1
+
+                if valid_count == 0:
+                    continue
+
+                avg_pnl = total_pnl / valid_count
+                avg_wr = total_wr / valid_count
+
+                results_log.append(f"{strat_name} {params}: PnL={avg_pnl:.2f} ATR, WR={avg_wr:.1f}% (n={valid_count})")
+
+                # Require win rate >= 40% to avoid lucky low-sample configs
+                if avg_wr < 40.0:
+                    continue
+                if avg_pnl > best_pnl:
+                    best_pnl = avg_pnl
                     best_config = {
                         'strategy': strat_name,
                         'params': params,
-                        'expected_pnl': pnl,
-                        'expected_wr': win_rate
+                        'expected_pnl': avg_pnl,
+                        'expected_wr': avg_wr
                     }
-                    
+
         # Log results for debugging
         for res in results_log:
             print(f"🔍 Tuner check: {res}")
-            
+
         if best_pnl > 0 and best_config:
             return best_config
-            
+
         # If nothing is profitable, default to robust strategy to protect capital
         return {
             'strategy': 'v7_robust',

@@ -498,7 +498,7 @@ def bot_loop():
             if total_trades > 0 and total_trades - LAST_TUNE_TRADES >= 10:
                 print("🔄 Lancement de l'Auto-Tuner...", flush=True)
                 # On utilise BTC par défaut comme indicateur de marché général
-                best_config = tuner.get_best_configuration(SYMBOLS[0], TIMEFRAME)
+                best_config = tuner.get_best_configuration(SYMBOLS, TIMEFRAME)
                 
                 if best_config:
                     new_strat = best_config['strategy']
