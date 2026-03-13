@@ -68,14 +68,14 @@ def apply_indicators(df):
 
 
 def detect_trend(df):
-    """Tendance EMA20/50 pour information (non bloquant)"""
+    """Tendance EMA20/50 — retourne 'long', 'short' ou None"""
     last = df.iloc[-1]
     if pd.isna(last.get('ema20')) or pd.isna(last.get('ema50')):
         return None
     if last['ema20'] > last['ema50'] and last['close'] > last['ema20']:
-        return 'bullish'
+        return 'long'
     if last['ema20'] < last['ema50'] and last['close'] < last['ema20']:
-        return 'bearish'
+        return 'short'
     return None
 
 
