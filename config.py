@@ -18,6 +18,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "2"))
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "300"))
+MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "10"))      # % du capital max perdu/jour
+MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "5")) # Arrêt après N pertes consécutives
 
 # =========================
 # ATR RISK MANAGEMENT

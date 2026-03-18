@@ -1,5 +1,6 @@
 import time
 import pandas as pd
+import pytz
 from datetime import datetime, timezone
 
 from config import exchange, SYMBOL, TIMEFRAME, CAPITAL, RISK_PER_TRADE, LEVERAGE
@@ -10,6 +11,17 @@ from notifier import send_telegram
 in_position = False
 trades_today = 0
 current_day = datetime.now(timezone.utc).date()
+
+NY_TZ = pytz.timezone("America/New_York")
+JOURS_SEMAINE = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+
+def is_trading_hours():
+    """Retourne True si on est Lun-Ven entre 10h00 et 16h00 heure New York."""
+    now_ny = datetime.now(NY_TZ)
+    if now_ny.weekday() >= 5:  # Samedi=5, Dimanche=6
+        return False
+    return 10 <= now_ny.hour < 16
+
 
 def reset_daily():
     global trades_today, current_day
@@ -37,6 +49,18 @@ def run():
             print("⏳ Analyse marché (Zone2)...", flush=True)
 
             reset_daily()
+
+            # Vérification créneau horaire XAUUSDT : Lun-Ven 10h-16h New York
+            if not is_trading_hours():
+                now_ny = datetime.now(NY_TZ)
+                print(
+                    f"🕐 Zone2 - Hors créneau XAUUSDT | "
+                    f"{JOURS_SEMAINE[now_ny.weekday()]} {now_ny.strftime('%H:%M')} NY | "
+                    f"Trading: Lun-Ven 10h00-16h00",
+                    flush=True
+                )
+                time.sleep(300)
+                continue
 
             df = fetch_data()
             df = apply_indicators(df)

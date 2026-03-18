@@ -4,6 +4,7 @@ import pandas as pd
 import math
 import os
 import json
+import pytz
 from datetime import datetime
 
 from config import *
@@ -12,8 +13,14 @@ from notifier import send_telegram
 from strategy_v9_scalper import apply_indicators as apply_v9, check_signal as check_v9
 from strategy_v7_robust import apply_indicators as apply_v7, check_signal as check_v7
 from strategy_v6 import apply_indicators as apply_v6, check_signal as check_v6
+from strategy_sniper_ote import check_signal as check_sniper, RR_TARGET as SNIPER_RR
 from auto_tuner import AutoTuner
 from logger_enhanced import get_logger
+
+# ── Timezone Paris pour la session américaine (14h30-20h00) ──────────────────
+PARIS_TZ = pytz.timezone("Europe/Paris")
+SNIPER_SESSION_START = (14, 30)   # 14h30 Paris
+SNIPER_SESSION_END   = (20,  0)   # 20h00 Paris
 
 # ================= CONFIGURATION =================
 BOT_NAME = "MULTI_SYMBOL_V6_3"
@@ -26,7 +33,7 @@ last_trade_time = {}
 active_positions = {} # {symbol: trade_data}
 
 # Active Strategy Settings
-ACTIVE_STRATEGY = 'v9_scalper'
+ACTIVE_STRATEGY = os.getenv("ACTIVE_STRATEGY", "v9_scalper")
 CURRENT_SL_MULTI = SL_ATR_MULTIPLIER
 CURRENT_TP_MULTI = TP_ATR_MULTIPLIER
 CURRENT_THRESHOLD = SCORE_THRESHOLD
@@ -133,6 +140,40 @@ def fetch_data(symbol):
     except Exception as e:
         logger.log_error(f"Fetch data error {symbol}", e)
         return pd.DataFrame()
+
+
+def fetch_data_m1(symbol):
+    """Données M1 pour l'exécution Sniper OTE"""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, '1m', limit=100)
+        return pd.DataFrame(ohlcv, columns=["time", "open", "high", "low", "close", "volume"])
+    except Exception as e:
+        logger.log_error(f"Fetch M1 error {symbol}", e)
+        return pd.DataFrame()
+
+
+def fetch_data_h4(symbol):
+    """Données H4 pour l'analyse macro Dow Theory"""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, '4h', limit=50)
+        return pd.DataFrame(ohlcv, columns=["time", "open", "high", "low", "close", "volume"])
+    except Exception as e:
+        logger.log_error(f"Fetch H4 error {symbol}", e)
+        return pd.DataFrame()
+
+
+def is_sniper_session():
+    """
+    Retourne True si on est dans la session américaine : Lun-Ven 14h30-20h00 Paris.
+    Couvre l'ouverture de Wall Street + pleine session US.
+    """
+    now = datetime.now(PARIS_TZ)
+    if now.weekday() >= 5:  # Samedi=5, Dimanche=6
+        return False
+    hm = now.hour * 60 + now.minute
+    start = SNIPER_SESSION_START[0] * 60 + SNIPER_SESSION_START[1]
+    end   = SNIPER_SESSION_END[0]   * 60 + SNIPER_SESSION_END[1]
+    return start <= hm < end
 
 # ================= POSITION SIZE =================
 
@@ -410,6 +451,148 @@ def open_trade(symbol, side, price, atr, score):
         logger.log_error(f"Trade error {symbol}", e)
         send_telegram(f"❌ Error opening {symbol}: {str(e)}")
 
+# ================= OPEN TRADE SNIPER ================
+
+def open_trade_sniper(symbol, side, price, sl_distance, score):
+    """
+    Ouvre un trade Sniper OTE :
+      - SL : distance structurelle passée en paramètre (mèches incluses)
+      - TP : RR 2.0 (2x SL distance)
+      - Trailing stop léger activé après dépassement du TP/2
+    """
+    if has_open_position(symbol):
+        print(f"🚫 {symbol} déjà en position, ouverture annulée.")
+        return
+
+    if len(active_positions) >= MAX_POSITIONS:
+        print(f"🚫 [{symbol}] Limite {MAX_POSITIONS} positions atteinte.")
+        return
+
+    base = get_base_currency(symbol)
+    for open_sym in active_positions:
+        if get_base_currency(open_sym) == base:
+            print(f"🚫 [{symbol}] Position déjà ouverte sur {open_sym} (même base: {base}).")
+            return
+
+    # Sécurité minimale sur le SL
+    min_sl = price * 0.0005
+    sl_dist = max(sl_distance, min_sl)
+    tp_dist = sl_dist * SNIPER_RR   # RR 2.0
+
+    qty = calculate_position_size(price, sl_dist)
+    if qty is None:
+        return
+
+    qty = adjust_qty(symbol, qty, price)
+    if qty is None:
+        print(f"⚠️ {symbol} Sniper: qty trop petite après ajustement")
+        return
+
+    if side == 'long':
+        sl = round(price - sl_dist, 4)
+        tp = round(price + tp_dist, 4)
+        order_side = 'buy'
+    else:
+        sl = round(price + sl_dist, 4)
+        tp = round(price - tp_dist, 4)
+        order_side = 'sell'
+
+    # Trailing stop léger : activation après TP/2, distance = SL/2
+    trailing_distance   = round(sl_dist * 0.5, 4)
+    activation_dist     = round(tp_dist * 0.5, 4)
+    activation_price    = price + activation_dist if side == 'long' else price - activation_dist
+
+    try:
+        params = {
+            "takeProfit":   str(round(tp, 4)),
+            "stopLoss":     str(round(sl, 4)),
+            "tpslMode":     "Partial",
+            "tpSize":       str(qty),
+            "slSize":       str(qty),
+            "tpLimitPrice": str(round(tp, 4)),
+            "tpOrderType":  "Limit",
+            "slOrderType":  "Market",
+            "positionIdx":  0,
+        }
+
+        order = exchange.create_order(symbol, "market", order_side, qty, None, params)
+
+        set_trailing_stop(symbol, trailing_distance, activation_price)
+
+        last_trade_time[symbol] = time.time()
+
+        active_positions[symbol] = {
+            "symbol":      symbol,
+            "side":        side,
+            "entry_price": price,
+            "qty":         qty,
+            "timestamp":   datetime.now().isoformat(),
+            "strategy":    "sniper_ote",
+        }
+
+        trade_data = {
+            'timestamp':            datetime.now().isoformat(),
+            'bot_name':             BOT_NAME,
+            'symbol':               symbol,
+            'side':                 side,
+            'entry_price':          price,
+            'quantity':             qty,
+            'entry_signal_strength': score,
+            'sl':                   sl,
+            'tp':                   tp,
+            'rr':                   SNIPER_RR,
+            'strategy':             'sniper_ote',
+        }
+        logger.log_trade_detailed(trade_data)
+
+        msg = (
+            f"🎯 SNIPER OTE TRADE\n\n"
+            f"Symbol: {symbol}\n"
+            f"Side: {side.upper()}\n"
+            f"Score: {score}/3\n"
+            f"Prix: {price:.4f}\n"
+            f"SL: {sl:.4f} (-{sl_dist/price*100:.2f}%)\n"
+            f"TP: {tp:.4f} (+{tp_dist/price*100:.2f}%)\n"
+            f"R:R = 1:{SNIPER_RR}\n"
+            f"Qty: {qty}"
+        )
+        send_telegram(msg)
+        print(f"✅ {msg}")
+        save_state()
+
+    except Exception as e:
+        logger.log_error(f"Sniper trade error {symbol}", e)
+        send_telegram(f"❌ Sniper error {symbol}: {str(e)}")
+
+
+# ================= RISK GUARDS =================
+
+def check_risk_limits():
+    """
+    Vérifie les deux gardes de risque journalier.
+    Retourne (True, raison) si le bot doit s'arrêter, (False, "") sinon.
+
+    Guards :
+      1. MAX_DAILY_LOSS_PCT  : PnL journalier < -(CAPITAL × MAX_DAILY_LOSS_PCT / 100)
+      2. MAX_CONSECUTIVE_LOSSES : N pertes consécutives atteint
+    """
+    max_loss_usdt = CAPITAL * MAX_DAILY_LOSS_PCT / 100
+
+    if daily_pnl <= -max_loss_usdt:
+        return True, (
+            f"🛑 MAX DAILY LOSS atteint | PnL: {daily_pnl:.2f} USDT | "
+            f"Limite: -{max_loss_usdt:.2f} USDT ({MAX_DAILY_LOSS_PCT}%)"
+        )
+
+    if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
+        return True, (
+            f"🛑 MAX CONSECUTIVE LOSSES atteint | "
+            f"{consecutive_losses} pertes consécutives (limite: {MAX_CONSECUTIVE_LOSSES})"
+        )
+
+    return False, ""
+
+
 # ================= BOT LOOP =================
 
 def bot_loop():
@@ -419,10 +602,36 @@ def bot_loop():
     tuner = AutoTuner(exchange, logger)
     LAST_TUNE_TRADES = total_trades
     
-    send_telegram(f"🚀 {BOT_NAME} STARTED\nSymbols: {len(SYMBOLS)}\nThreshold: {CURRENT_THRESHOLD}")
+    send_telegram(
+        f"🚀 {BOT_NAME} STARTED\n"
+        f"Stratégie: {ACTIVE_STRATEGY}\n"
+        f"Symbols: {len(SYMBOLS)}\n"
+        f"Threshold: {CURRENT_THRESHOLD}\n"
+        f"Risk guards: -{MAX_DAILY_LOSS_PCT}%/jour | {MAX_CONSECUTIVE_LOSSES} pertes consécutives max"
+    )
     print(f"🤖 {BOT_NAME} Monitoring {SYMBOLS}")
 
+    _risk_paused = False          # True quand les guards ont coupé le trading
+    _risk_pause_reason = ""
+
     while True:
+        # ── Guards de risque journalier ──────────────────────────────────────
+        blocked, reason = check_risk_limits()
+        if blocked:
+            if not _risk_paused:
+                _risk_paused = True
+                _risk_pause_reason = reason
+                print(reason, flush=True)
+                send_telegram(f"⛔ {BOT_NAME} TRADING SUSPENDU\n{reason}\nReprise demain à minuit UTC.")
+            time.sleep(300)
+            continue
+
+        # Reset du flag si on était en pause et que le guard n'est plus actif
+        # (peut arriver si le bot redémarre un nouveau jour)
+        if _risk_paused:
+            _risk_paused = False
+            send_telegram(f"✅ {BOT_NAME} - Guards OK, trading repris.")
+
         for symbol in SYMBOLS:
             try:
                 if not cooldown_ok(symbol):
@@ -432,29 +641,63 @@ def bot_loop():
                 if df.empty:
                     continue
 
-                if ACTIVE_STRATEGY == 'v9_scalper':
+                if ACTIVE_STRATEGY == 'sniper_ote':
+                    # ── Sniper OTE : session + dual timeframe ────────────────
+                    if not is_sniper_session():
+                        now_p = datetime.now(PARIS_TZ)
+                        print(
+                            f"🕐 Sniper hors session | {now_p.strftime('%a %H:%M')} Paris | "
+                            f"Trading: Lun-Ven 14h30-20h00",
+                            flush=True
+                        )
+                        time.sleep(0.2)
+                        continue
+
+                    df_m1 = fetch_data_m1(symbol)
+                    df_h4 = fetch_data_h4(symbol)
+                    if df_m1.empty or df_h4.empty:
+                        continue
+
+                    signal, score, sl_distance = check_sniper(df_m1, df_h4)
+                    price = float(df_m1['close'].iloc[-1])
+                    atr   = sl_distance  # pour le logging
+                    reason = ""
+
+                    if signal:
+                        if score >= CURRENT_THRESHOLD:
+                            open_trade_sniper(symbol, signal, price, sl_distance, score)
+                            executed = True
+                        else:
+                            reason = f"Score insuffisant ({score}/{CURRENT_THRESHOLD})"
+                            executed = False
+                    else:
+                        reason = "Hors zone OTE ou tendance Dow absente"
+                        executed = False
+
+                elif ACTIVE_STRATEGY == 'v9_scalper':
                     df = apply_v9(df)
                     signal, score, atr = check_v9(df)
                 elif ACTIVE_STRATEGY == 'v6_aggressive':
                     df = apply_v6(df)
                     signal, score, atr = check_v6(df)
-                else: # Default robust v7
+                else:  # Default robust v7
                     df = apply_v7(df)
                     signal, score, atr = check_v7(df)
-                
-                price = df.close.iloc[-1]
-                reason = ""
-                
-                if signal:
-                    if score >= CURRENT_THRESHOLD:
-                        open_trade(symbol, signal, price, atr, score)
-                        executed = True
+
+                if ACTIVE_STRATEGY != 'sniper_ote':
+                    price = df.close.iloc[-1]
+                    reason = ""
+
+                    if signal:
+                        if score >= CURRENT_THRESHOLD:
+                            open_trade(symbol, signal, price, atr, score)
+                            executed = True
+                        else:
+                            reason = f"Score insuffisant ({score}/{CURRENT_THRESHOLD})"
+                            executed = False
                     else:
-                        reason = f"Score insuffisant ({score}/{CURRENT_THRESHOLD})"
+                        reason = "Pas de signal EMA"
                         executed = False
-                else:
-                    reason = "Pas de signal EMA"
-                    executed = False
 
                 # Logging des signaux (même rejetés)
                 signal_data = {

@@ -1,4 +1,5 @@
 ccxt==4.3.57
+pytz
 pandas
 pandas-ta
 flask
