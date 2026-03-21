@@ -265,25 +265,47 @@ def has_open_position(symbol, ignore_cache=False):
 def handle_position_closed(symbol):
     global daily_pnl, total_trades, consecutive_losses
     try:
-        # Attendre un peu pour que Bybit enregistre le trade fermé
-        time.sleep(2)
-        
-        # Récupérer le PnL réalisé via l'API V5 de Bybit
+        # Récupérer les infos de la position AVANT suppression du cache
+        cached = active_positions.get(symbol, {})
+        pos_side       = cached.get('side', 'unknown')
+        pos_entry      = cached.get('entry_price', 0)
+        pos_qty        = cached.get('qty', 0)
+        pos_strategy   = cached.get('strategy', 'unknown')
+
+        # Retry avec délai croissant — Bybit enregistre le PnL avec un léger délai
+        # après la fermeture par trailing stop (asynchrone côté serveur)
         clean_symbol = symbol.split(':')[0].replace('/', '')
         pnl = 0.0
-        
-        try:
-            pnl_resp = exchange.private_get_v5_position_closed_pnl({
-                "category": "linear",
-                "symbol": clean_symbol,
-                "limit": 1
-            })
-            if pnl_resp.get('result', {}).get('list'):
-                pnl = float(pnl_resp['result']['list'][0].get('closedPnl', 0))
-        except Exception as e:
-            logger.log_error(f"Error fetching closed PnL for {symbol}", e)
-            # Fallback simple si l'API échoue
-            pnl = 0.0
+        exit_price = 0.0
+
+        for attempt in range(4):                        # 4 tentatives max
+            wait = [3, 5, 8, 12][attempt]              # 3s → 5s → 8s → 12s
+            print(f"⏳ {symbol} - Attente PnL tentative {attempt+1}/4 ({wait}s)...", flush=True)
+            time.sleep(wait)
+            try:
+                pnl_resp = exchange.private_get_v5_position_closed_pnl({
+                    "category": "linear",
+                    "symbol":   clean_symbol,
+                    "limit":    1
+                })
+                if pnl_resp.get('result', {}).get('list'):
+                    data       = pnl_resp['result']['list'][0]
+                    pnl        = float(data.get('closedPnl', 0))
+                    exit_price = float(data.get('avgExitPrice') or data.get('avgPrice', 0))
+                    if pnl != 0.0:
+                        print(f"✅ {symbol} - PnL récupéré à la tentative {attempt+1}: {pnl:.2f} USDT", flush=True)
+                        break
+            except Exception as e:
+                logger.log_error(f"Error fetching closed PnL {symbol} attempt {attempt+1}", e)
+
+        if pnl == 0.0:
+            # Fallback : calcul depuis prix d'entrée/sortie si disponible
+            if exit_price > 0 and pos_entry > 0 and pos_qty > 0:
+                raw = (exit_price - pos_entry) if pos_side == 'long' else (pos_entry - exit_price)
+                pnl = round(raw * pos_qty, 4)
+                print(f"⚠️ {symbol} - PnL calculé (fallback): {pnl:.2f} USDT", flush=True)
+            else:
+                print(f"⚠️ {symbol} - PnL indisponible après 4 tentatives", flush=True)
 
         daily_pnl += pnl
         total_trades += 1
@@ -291,21 +313,26 @@ def handle_position_closed(symbol):
             consecutive_losses += 1
         else:
             consecutive_losses = 0
-        
-        print(f"💰 {symbol} Position fermée. PnL: {pnl:.2f} USDT. Total Jour: {daily_pnl:.2f} USDT")
+
+        result = "WIN" if pnl > 0 else ("LOSS" if pnl < 0 else "UNKNOWN")
+        print(f"💰 {symbol} [{pos_side.upper()}] {result} | PnL: {pnl:.2f} USDT | Jour: {daily_pnl:.2f} USDT")
         save_state()
-        
-        # Log de sortie (minimaliste car réalisé sur l'échange)
+
         trade_data = {
-            'timestamp': datetime.now().isoformat(),
-            'bot_name': BOT_NAME,
-            'symbol': symbol,
-            'pnl_usdt': pnl,
-            'result': "WIN" if pnl > 0 else "LOSS",
-            'exit_reason': 'Exchange closed (SL/TP/Trailing)'
+            'timestamp':    datetime.now().isoformat(),
+            'bot_name':     BOT_NAME,
+            'symbol':       symbol,
+            'side':         pos_side,
+            'entry_price':  pos_entry,
+            'exit_price':   exit_price,
+            'quantity':     pos_qty,
+            'pnl_usdt':     pnl,
+            'result':       result,
+            'exit_reason':  'Exchange closed (SL/TP/Trailing)',
+            'strategy':     pos_strategy,
         }
         logger.log_trade_detailed(trade_data)
-        
+
     except Exception as e:
         logger.log_error(f"Error handling closed position for {symbol}", e)
 
@@ -422,14 +449,16 @@ def open_trade(symbol, side, price, atr, score):
         last_trade_time[symbol] = time.time()
         
         trade_data = {
-            'timestamp': datetime.now().isoformat(),
-            'bot_name': BOT_NAME,
-            'symbol': symbol,
-            'side': side,
-            'entry_price': price,
-            'quantity': qty,
+            'timestamp':             datetime.now().isoformat(),
+            'bot_name':              BOT_NAME,
+            'symbol':                symbol,
+            'side':                  side,
+            'entry_price':           price,
+            'quantity':              qty,
+            'result':                'OPEN',
+            'exit_reason':           'position opened',
             'entry_signal_strength': score,
-            'entry_atr_percent': (atr/price)
+            'entry_atr_percent':     (atr / price),
         }
         logger.log_trade_detailed(trade_data)
         
@@ -531,17 +560,16 @@ def open_trade_sniper(symbol, side, price, sl_distance, score):
         }
 
         trade_data = {
-            'timestamp':            datetime.now().isoformat(),
-            'bot_name':             BOT_NAME,
-            'symbol':               symbol,
-            'side':                 side,
-            'entry_price':          price,
-            'quantity':             qty,
+            'timestamp':             datetime.now().isoformat(),
+            'bot_name':              BOT_NAME,
+            'symbol':                symbol,
+            'side':                  side,
+            'entry_price':           price,
+            'quantity':              qty,
+            'result':                'OPEN',
+            'exit_reason':           'position opened',
             'entry_signal_strength': score,
-            'sl':                   sl,
-            'tp':                   tp,
-            'rr':                   SNIPER_RR,
-            'strategy':             'sniper_ote',
+            'strategy':              'sniper_ote',
         }
         logger.log_trade_detailed(trade_data)
 
