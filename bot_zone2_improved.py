@@ -396,162 +396,19 @@ def run():
 
     while True:
         try:
-            print("⏳ Zone2 - Analyse marché...", flush=True)
-
             reset_daily()
 
-            if trades_today >= MAX_TRADES_PER_DAY:
-                print("🛑 Zone2 - Max trades atteints", flush=True)
-                time.sleep(300)
-                continue
-
-            if last_trade_time and time.time() - last_trade_time < COOLDOWN_SECONDS:
-                print("⏸ Zone2 - Cooldown actif", flush=True)
-                time.sleep(60)
-                continue
-
-            # Vérification créneau horaire XAUUSDT : Lun-Ven 10h-16h New York
-            if not is_trading_hours():
-                now_ny = datetime.now(NY_TZ)
-                print(
-                    f"🕐 Zone2 - Hors créneau XAUUSDT | "
-                    f"{JOURS_SEMAINE[now_ny.weekday()]} {now_ny.strftime('%H:%M')} NY | "
-                    f"Trading: Lun-Ven 10h00-16h00",
-                    flush=True
-                )
-                time.sleep(300)
-                continue
-
-            df = fetch_data()
-            df = apply_indicators(df)
-            signal = check_signal(df)
-
-            # ===== OUVERTURE =====
-            if signal and not in_position:
-                # Vérifier solde
-                available_balance = get_available_balance()
-                
-                if available_balance < 5:
-                    print("❌ Zone2 - Solde insuffisant", flush=True)
-                    send_telegram(f"⚠️ ZONE2 - Solde insuffisant: {available_balance} USDT")
-                    time.sleep(300)
-                    continue
-                
-                # Capital effectif
-                effective_capital = min(CAPITAL, available_balance * 0.95)
-                print(f"📊 Zone2 - Capital effectif: {round(effective_capital, 2)} USDT", flush=True)
-                
-                price = df.iloc[-1].close
-
-                qty = calculate_position_size(
-                    effective_capital,
-                    RISK_PER_TRADE,
-                    STOP_LOSS_PCT,
-                    price,
-                    LEVERAGE
-                )
-
-                qty = adjust_qty_to_min_notional(SYMBOL, qty, price)
-
-                if qty <= 0:
-                    print("⚠️ Zone2 - Qty invalide", flush=True)
-                    time.sleep(300)
-                    continue
-
-                # Calculer SL/TP
-                # STRATÉGIE MEAN REVERSION : On inverse SL et TP !
-                # Le prix devrait revenir vers l'EMA (ancien SL devient TP)
-                # Si ça continue dans la direction, on coupe (ancien TP devient SL)
-                if signal == "long":
-                    # Prix calculé "SL" = objectif de retour = TP réel
-                    calculated_sl = price * (1 - STOP_LOSS_PCT)
-                    # Prix calculé "TP" = protection si continue = SL réel
-                    calculated_tp = price * (1 + (STOP_LOSS_PCT * RR_MULTIPLIER))
-                    
-                    # INVERSION : SL ↔ TP
-                    sl_price = calculated_tp  # Protection si ça monte
-                    tp_price = calculated_sl  # Objectif de retour vers le bas
-                    order_side = "buy"
-                else:
-                    # Prix calculé "SL" = objectif de retour = TP réel
-                    calculated_sl = price * (1 + STOP_LOSS_PCT)
-                    # Prix calculé "TP" = protection si continue = SL réel
-                    calculated_tp = price * (1 - (STOP_LOSS_PCT * RR_MULTIPLIER))
-                    
-                    # INVERSION : SL ↔ TP
-                    sl_price = calculated_tp  # Protection si ça baisse
-                    tp_price = calculated_sl  # Objectif de retour vers le haut
-                    order_side = "sell"
-
-                # Passer ordre
-                print(f"📊 Zone2 - Ouverture {signal.upper()} | Qty={qty}", flush=True)
-                
-                order = exchange.create_market_order(
-                    SYMBOL,
-                    order_side,
-                    qty
-                )
-
-                # Placer SL/TP (OBLIGATOIRE)
-                print("🔒 Zone2 - Placement SL/TP...", flush=True)
-                sl_tp_success = place_sl_tp_orders(SYMBOL, signal, qty, price, sl_price, tp_price)
-
-                # SI ÉCHEC → FERMER
-                if not sl_tp_success:
-                    print("🚨 Zone2 - SL/TP impossible → Fermeture immédiate", flush=True)
-                    send_telegram(f"🚨 ZONE2 ALERTE\nSL/TP impossible\nPosition fermée par sécurité")
-                    
-                    close_position_immediately(SYMBOL, signal, qty)
-                    time.sleep(300)
-                    continue
-
-                # Mettre à jour état (seulement si SL/TP OK)
-                in_position = True
-                trades_today += 1
-                last_trade_time = time.time()
-
-                # Seuil d'activation du trailing = 80% de la distance entry→sl_price
-                trail_activation = round(
-                    price + TRAILING_ACTIVATION_PCT * (sl_price - price), 4
-                )
-
-                current_trade = {
-                    "entry_price": price,
-                    "side": signal,
-                    "qty": qty,
-                    "sl_price": sl_price,
-                    "tp_price": tp_price,
-                    "peak_price": price,
-                    "trailing_sl": 0,
-                    "trailing_active": False,
-                    "entry_time": datetime.now(timezone.utc),
-                }
-
-                # Notification
-                msg = (
-                    f"🎯 ZONE2 TRADE OUVERT\n"
-                    f"Type: Mean Reversion\n"
-                    f"Direction: {signal.upper()}\n"
-                    f"Prix: {round(price, 2)} USDT\n"
-                    f"Quantité: {qty}\n"
-                    f"SL: {round(sl_price, 2)}\n"
-                    f"TP: {round(tp_price, 2)}\n"
-                    f"R:R = 1:{RR_MULTIPLIER}\n"
-                    f"SL/TP: ✅ PLACÉS ET CONFIRMÉS\n"
-                    f"Trailing actif à: {trail_activation:.2f} (80% TP)\n"
-                    f"Trailing SL: {TRAILING_STOP_PCT*100}% breakeven"
-                )
-                print(msg, flush=True)
-                send_telegram(msg)
-
-            # ===== TRAILING STOP =====
+            # ═══════════════════════════════════════════════════════════════════
+            # PRIORITÉ 1 : Trailing stop + surveillance position
+            # → Toujours actif, QUELLE QUE SOIT L'HEURE
+            # ═══════════════════════════════════════════════════════════════════
             if in_position:
+                # Trailing stop logiciel
                 if check_trailing_stop():
                     time.sleep(60)
                     continue
 
-            # ===== VÉRIFIER CLÔTURE BYBIT (SL/TP natifs) =====
-            if in_position:
+                # Vérifier si Bybit a fermé la position (SL/TP natifs)
                 positions = exchange.fetch_positions([SYMBOL])
                 pos = next((p for p in positions if p.get("symbol") == SYMBOL), None)
 
@@ -585,12 +442,133 @@ def run():
                     )
                     print(msg, flush=True)
                     send_telegram(msg)
-
                     in_position = False
                     current_trade = dict(EMPTY_TRADE)
 
-            # Sleep court si en position (trailing stop réactif), long sinon
-            time.sleep(30 if in_position else 300)
+                # En position → sleep court pour rester réactif
+                time.sleep(30)
+                continue
+
+            # ═══════════════════════════════════════════════════════════════════
+            # PRIORITÉ 2 : Ouverture de nouveaux trades
+            # → Filtrée par créneau horaire, cooldown, max trades
+            # ═══════════════════════════════════════════════════════════════════
+
+            # Filtre max trades journaliers
+            if trades_today >= MAX_TRADES_PER_DAY:
+                print("🛑 Zone2 - Max trades atteints", flush=True)
+                time.sleep(300)
+                continue
+
+            # Filtre cooldown
+            if last_trade_time and time.time() - last_trade_time < COOLDOWN_SECONDS:
+                print("⏸ Zone2 - Cooldown actif", flush=True)
+                time.sleep(60)
+                continue
+
+            # Filtre créneau horaire XAUUSDT : Lun-Ven 10h-16h New York
+            if not is_trading_hours():
+                now_ny = datetime.now(NY_TZ)
+                print(
+                    f"🕐 Zone2 - Hors créneau | "
+                    f"{JOURS_SEMAINE[now_ny.weekday()]} {now_ny.strftime('%H:%M')} NY | "
+                    f"Lun-Ven 10h00-16h00",
+                    flush=True
+                )
+                time.sleep(300)
+                continue
+
+            # Analyse signal
+            print("⏳ Zone2 - Analyse marché...", flush=True)
+            df = fetch_data()
+            df = apply_indicators(df)
+            signal = check_signal(df)
+
+            # ===== OUVERTURE =====
+            if signal:
+                available_balance = get_available_balance()
+                if available_balance < 5:
+                    print("❌ Zone2 - Solde insuffisant", flush=True)
+                    send_telegram(f"⚠️ ZONE2 - Solde insuffisant: {available_balance} USDT")
+                    time.sleep(300)
+                    continue
+
+                effective_capital = min(CAPITAL, available_balance * 0.95)
+                print(f"📊 Zone2 - Capital effectif: {round(effective_capital, 2)} USDT", flush=True)
+                price = df.iloc[-1].close
+
+                qty = calculate_position_size(
+                    effective_capital, RISK_PER_TRADE, STOP_LOSS_PCT, price, LEVERAGE
+                )
+                qty = adjust_qty_to_min_notional(SYMBOL, qty, price)
+
+                if qty <= 0:
+                    print("⚠️ Zone2 - Qty invalide", flush=True)
+                    time.sleep(300)
+                    continue
+
+                if signal == "long":
+                    calculated_sl = price * (1 - STOP_LOSS_PCT)
+                    calculated_tp = price * (1 + (STOP_LOSS_PCT * RR_MULTIPLIER))
+                    sl_price   = calculated_tp
+                    tp_price   = calculated_sl
+                    order_side = "buy"
+                else:
+                    calculated_sl = price * (1 + STOP_LOSS_PCT)
+                    calculated_tp = price * (1 - (STOP_LOSS_PCT * RR_MULTIPLIER))
+                    sl_price   = calculated_tp
+                    tp_price   = calculated_sl
+                    order_side = "sell"
+
+                print(f"📊 Zone2 - Ouverture {signal.upper()} | Qty={qty}", flush=True)
+                exchange.create_market_order(SYMBOL, order_side, qty)
+
+                print("🔒 Zone2 - Placement SL/TP...", flush=True)
+                sl_tp_success = place_sl_tp_orders(SYMBOL, signal, qty, price, sl_price, tp_price)
+
+                if not sl_tp_success:
+                    print("🚨 Zone2 - SL/TP impossible → Fermeture immédiate", flush=True)
+                    send_telegram("🚨 ZONE2 ALERTE\nSL/TP impossible\nPosition fermée par sécurité")
+                    close_position_immediately(SYMBOL, signal, qty)
+                    time.sleep(300)
+                    continue
+
+                in_position = True
+                trades_today += 1
+                last_trade_time = time.time()
+
+                trail_activation = round(
+                    price + TRAILING_ACTIVATION_PCT * (sl_price - price), 4
+                )
+                current_trade = {
+                    "entry_price":    price,
+                    "side":           signal,
+                    "qty":            qty,
+                    "sl_price":       sl_price,
+                    "tp_price":       tp_price,
+                    "peak_price":     price,
+                    "trailing_sl":    0,
+                    "trailing_active": False,
+                    "entry_time":     datetime.now(timezone.utc),
+                }
+
+                msg = (
+                    f"🎯 ZONE2 TRADE OUVERT\n"
+                    f"Direction: {signal.upper()}\n"
+                    f"Prix: {round(price, 2)} USDT\n"
+                    f"Quantité: {qty}\n"
+                    f"SL: {round(sl_price, 2)}\n"
+                    f"TP: {round(tp_price, 2)}\n"
+                    f"R:R = 1:{RR_MULTIPLIER}\n"
+                    f"SL/TP: ✅ PLACÉS\n"
+                    f"Trailing actif à: {trail_activation:.2f} (80% TP)\n"
+                    f"Trailing SL: {TRAILING_STOP_PCT*100}% breakeven"
+                )
+                print(msg, flush=True)
+                send_telegram(msg)
+
+            # Pas en position, pas de signal → sleep long
+            time.sleep(300)
 
         except Exception as e:
             print("❌ Zone2 error:", e, flush=True)
