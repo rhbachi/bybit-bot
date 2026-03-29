@@ -9,6 +9,7 @@ import threading
 from flask import Flask, jsonify
 import os
 import json
+import pytz
 from database import init_db, insert_trade, get_recent_trades
 
 # =========================
@@ -101,6 +102,18 @@ TRAILING_STOP_DISTANCE = float(os.getenv('TRAILING_STOP_DISTANCE', '0.003'))
 MAX_DAILY_LOSS_PCT = float(os.getenv('MAX_DAILY_LOSS_PCT', '5'))
 MAX_CONSECUTIVE_LOSSES = int(os.getenv('MAX_CONSECUTIVE_LOSSES', '3'))
 RISK_PER_TRADE = float(os.getenv('RISK_PER_TRADE', '0.02'))
+
+# =========================
+# FILTRE HORAIRE (GOLD = Marché américain)
+# =========================
+NY_TZ = pytz.timezone("America/New_York")
+
+def is_trading_hours():
+    """Lun-Ven entre 10h00 et 16h00 heure New York (session US Gold)."""
+    now_ny = datetime.now(NY_TZ)
+    if now_ny.weekday() >= 5:  # Samedi=5, Dimanche=6
+        return False
+    return 10 <= now_ny.hour < 16
 
 # =========================
 # ÉTAT MULTI-SYMBOLE
@@ -438,43 +451,47 @@ def run():
                 if active_positions.get(symbol):
                     trade_info = trades_state.get(symbol)
                     if trade_info:
+                        # Récupérer le prix courant (fallback sur le dernier prix connu)
+                        current_price = trade_info.get('last_price', trade_info['entry_price'])
                         df_trail = fetch_ohlcv(symbol, limit=2)
                         if not df_trail.empty:
                             current_price = df_trail['close'].iloc[-1]
                             trade_info['last_price'] = current_price
-                            
-                            new_sl = update_trailing_stop(
-                                symbol,
-                                trade_info['side'],
-                                trade_info['qty'],
-                                current_price,
-                                trade_info['sl_price']
-                            )
-                            if new_sl != trade_info['sl_price']:
-                                trade_info['sl_price'] = new_sl
-                                trade_info['trailing_activated'] = True
-                
+
+                        # Trailing stop — toujours évalué avant la vérification de fermeture
+                        new_sl = update_trailing_stop(
+                            symbol,
+                            trade_info['side'],
+                            trade_info['qty'],
+                            current_price,
+                            trade_info['sl_price']
+                        )
+                        if new_sl != trade_info['sl_price']:
+                            trade_info['sl_price'] = new_sl
+                            trade_info['trailing_activated'] = True
+
                         # Check exit
                         position_closed = False
                         exit_reason = None
-                        
+
                         if PAPER_TRADING:
                             if trade_info['side'] == 'long':
                                 if current_price <= trade_info['sl_price']:
                                     position_closed, exit_reason = True, "SL"
                                 elif current_price >= trade_info['tp_price']:
                                     position_closed, exit_reason = True, "TP"
-                            else: # short
+                            else:  # short
                                 if current_price >= trade_info['sl_price']:
                                     position_closed, exit_reason = True, "SL"
                                 elif current_price <= trade_info['tp_price']:
                                     position_closed, exit_reason = True, "TP"
                         else:
                             try:
-                                # On ignore le cache ici car Bybit est la source de vérité pour la fermeture
+                                # Bybit est la source de vérité pour la fermeture
                                 if not has_open_position(symbol, ignore_cache=True):
                                     position_closed, exit_reason = True, "SL/TP (Market)"
-                            except: pass
+                            except:
+                                pass
 
                         if position_closed:
                             finalize_trade(symbol, trade_info, current_price, exit_reason or "EXIT")
@@ -485,13 +502,27 @@ def run():
 
                 # 2. Recherche de nouveaux signaux
                 if not active_positions.get(symbol):
-                    if not cooldown_ok(symbol): continue
-                    
+                    if not cooldown_ok(symbol):
+                        continue
+
+                    # Filtre horaire : Lun-Ven 10h-16h NY (session US Gold)
+                    if not is_trading_hours():
+                        now_ny = datetime.now(NY_TZ)
+                        jours = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+                        print(
+                            f"🕐 [{symbol}] Hors créneau | "
+                            f"{jours[now_ny.weekday()]} {now_ny.strftime('%H:%M')} NY | "
+                            f"Lun-Ven 10h00-16h00",
+                            flush=True
+                        )
+                        continue
+
                     df = fetch_ohlcv(symbol, limit=100)
-                    if df.empty: continue
-                    
+                    if df.empty:
+                        continue
+
                     signal, df_with_indicators = check_signal_with_logging(symbol, df)
-                    
+
                     if signal:
                         print(f"🎯 [{symbol}] Signal détecté: {signal.upper()}", flush=True)
                         execute_entry(symbol, signal, df_with_indicators)
