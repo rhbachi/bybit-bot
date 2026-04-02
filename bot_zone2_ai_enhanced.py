@@ -505,8 +505,8 @@ def run():
                     if not cooldown_ok(symbol):
                         continue
 
-                    # Filtre horaire : Lun-Ven 10h-16h NY (session US Gold)
-                    if not is_trading_hours():
+                    # Filtre horaire : XAUT uniquement → Lun-Ven 10h-16h NY (session US Gold)
+                    if "XAUT" in symbol and not is_trading_hours():
                         now_ny = datetime.now(NY_TZ)
                         jours = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
                         print(
