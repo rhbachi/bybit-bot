@@ -14,6 +14,11 @@ from strategy_v9_scalper import apply_indicators as apply_v9, check_signal as ch
 from strategy_v7_robust import apply_indicators as apply_v7, check_signal as check_v7
 from strategy_v6 import apply_indicators as apply_v6, check_signal as check_v6
 from strategy_sniper_ote import check_signal as check_sniper, RR_TARGET as SNIPER_RR
+from strategy_scalping_5m import (
+    apply_indicators as apply_scalp5m,
+    check_signal as check_scalp5m,
+    get_trail_params as scalp5m_trail_params,
+)
 from auto_tuner import AutoTuner
 from logger_enhanced import get_logger
 
@@ -33,7 +38,7 @@ last_trade_time = {}
 active_positions = {} # {symbol: trade_data}
 
 # Active Strategy Settings
-ACTIVE_STRATEGY = os.getenv("ACTIVE_STRATEGY", "v9_scalper")
+ACTIVE_STRATEGY = os.getenv("ACTIVE_STRATEGY", "scalping_5m")
 CURRENT_SL_MULTI = SL_ATR_MULTIPLIER
 CURRENT_TP_MULTI = TP_ATR_MULTIPLIER
 CURRENT_THRESHOLD = SCORE_THRESHOLD
@@ -159,6 +164,16 @@ def fetch_data_h4(symbol):
         return pd.DataFrame(ohlcv, columns=["time", "open", "high", "low", "close", "volume"])
     except Exception as e:
         logger.log_error(f"Fetch H4 error {symbol}", e)
+        return pd.DataFrame()
+
+
+def fetch_data_5m(symbol):
+    """Données 5M pour la stratégie Scalping 5M (besoin de 200 bougies)"""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=200)
+        return pd.DataFrame(ohlcv, columns=["time", "open", "high", "low", "close", "volume"])
+    except Exception as e:
+        logger.log_error(f"Fetch 5M error {symbol}", e)
         return pd.DataFrame()
 
 
@@ -412,11 +427,14 @@ def open_trade(symbol, side, price, atr, score):
         tp = price - tp_dist
         order_side = "sell"
 
-    # Calcul de la distance du trailing stop
-    # On active le trailing stop seulement quand on a couvert les frais + un peu de profit
-    trailing_distance = max(atr * 0.5, price * 0.0010)
-    activation_dist = max(atr * 0.5, price * 0.0015)
-    
+    # Calcul du trailing stop selon la stratégie active
+    # scalping_5m : logique Pine Script (activation 80% TP, lock à 10% TP)
+    if ACTIVE_STRATEGY == "scalping_5m":
+        activation_dist, trailing_distance = scalp5m_trail_params(tp_dist)
+    else:
+        trailing_distance = max(atr * 0.5, price * 0.0010)
+        activation_dist   = max(atr * 0.5, price * 0.0015)
+
     activation_price = price + activation_dist if side == "long" else price - activation_dist
 
     try:
@@ -633,8 +651,8 @@ def bot_loop():
     send_telegram(
         f"🚀 {BOT_NAME} STARTED\n"
         f"Stratégie: {ACTIVE_STRATEGY}\n"
-        f"Symbols: {len(SYMBOLS)}\n"
-        f"Threshold: {CURRENT_THRESHOLD}\n"
+        f"Symbols: {len(SYMBOLS)} | TF: {'5m' if ACTIVE_STRATEGY == 'scalping_5m' else TIMEFRAME}\n"
+        f"SL: {CURRENT_SL_MULTI}×ATR | TP: {CURRENT_TP_MULTI}×ATR | Threshold: {CURRENT_THRESHOLD}\n"
         f"Risk guards: -{MAX_DAILY_LOSS_PCT}%/jour | {MAX_CONSECUTIVE_LOSSES} pertes consécutives max"
     )
     print(f"🤖 {BOT_NAME} Monitoring {SYMBOLS}")
@@ -702,6 +720,13 @@ def bot_loop():
                         reason = "Hors zone OTE ou tendance Dow absente"
                         executed = False
 
+                elif ACTIVE_STRATEGY == 'scalping_5m':
+                    df5m = fetch_data_5m(symbol)
+                    if df5m.empty:
+                        continue
+                    df5m = apply_scalp5m(df5m)
+                    signal, score, atr = check_scalp5m(df5m)
+                    df = df5m  # use 5m df for price below
                 elif ACTIVE_STRATEGY == 'v9_scalper':
                     df = apply_v9(df)
                     signal, score, atr = check_v9(df)

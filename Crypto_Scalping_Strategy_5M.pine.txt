@@ -1,0 +1,316 @@
+// ══════════════════════════════════════════════════════════════════
+//  CRYPTO SCALPING STRATEGY — 5-Minute Chart
+//  Author  : Simo / Claude Analysis
+//  Version : Pine Script v5
+//  Assets  : BTC/USDT, ETH/USDT, SOL/USDT (any liquid crypto)
+//  TF      : 5-minute (recommended)
+//
+//  ── RISK MANAGEMENT ──────────────────────────────────────────────
+//  • Stop Loss      : 1.0× ATR below/above entry
+//  • Take Profit    : 2.0× ATR (2:1 R:R minimum)
+//  • Trailing Stop  : Activates at 80% of TP distance from entry
+//                     Initial trail level = entry + 10% of TP range
+//                     (locks in profit just above breakeven)
+//                     Trail then follows price, never moves backward
+// ══════════════════════════════════════════════════════════════════
+
+//@version=5
+strategy(
+     title             = "Crypto Scalping Strategy 5M",
+     shorttitle        = "SCALP 5M",
+     overlay           = true,
+     initial_capital   = 10000,
+     default_qty_type  = strategy.percent_of_equity,
+     default_qty_value = 5,             // 5% per trade — capital preservation first
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.05,          // 0.05% per side
+     slippage          = 3,             // 3 ticks slippage (realistic for 5M scalping)
+     calc_on_every_tick = false
+     )
+
+// ──────────────────────────────────────────────────────────────────
+//  INPUTS
+// ──────────────────────────────────────────────────────────────────
+grp1 = "── Trend Indicators ──"
+emaFastLen  = input.int(8,   "Fast EMA",       minval=1,  group=grp1, tooltip="Ultra-fast signal EMA. Default 8 = ~40 min on 5M chart.")
+emaSlowLen  = input.int(21,  "Slow EMA",       minval=1,  group=grp1, tooltip="Trend direction EMA. Cross of fast/slow confirms momentum.")
+useVWAP     = input.bool(true,"Use VWAP Filter",           group=grp1, tooltip="Only longs above VWAP, only shorts below VWAP.")
+
+grp2 = "── Momentum Filter ──"
+rsiLen      = input.int(7,   "RSI Length",     minval=2,  group=grp2)
+rsiLongMin  = input.int(45,  "RSI Long  Min",  minval=1,  maxval=100, group=grp2, tooltip="Long entries only when RSI is above this level.")
+rsiLongMax  = input.int(70,  "RSI Long  Max",  minval=1,  maxval=100, group=grp2, tooltip="Long entries only when RSI is below this level (not overbought).")
+rsiShortMin = input.int(30,  "RSI Short Min",  minval=1,  maxval=100, group=grp2, tooltip="Short entries only when RSI is above this level (not oversold).")
+rsiShortMax = input.int(55,  "RSI Short Max",  minval=1,  maxval=100, group=grp2, tooltip="Short entries only when RSI is below this level.")
+
+grp3 = "── Volume Filter ──"
+useVolume   = input.bool(true,  "Use Volume Filter",       group=grp3)
+volMaLen    = input.int(20,     "Volume MA Length",        group=grp3)
+volMulti    = input.float(1.2,  "Volume Multiplier", step=0.1, group=grp3, tooltip="Only trade when volume > X times the moving average.")
+
+grp4 = "── Risk Management ──"
+atrLen      = input.int(14,   "ATR Length",           minval=1, group=grp4)
+slMult      = input.float(1.0,"SL Multiplier (ATR)",  minval=0.1, step=0.1, group=grp4, tooltip="Stop loss = entry ± (ATR × this value)")
+tpMult      = input.float(2.0,"TP Multiplier (ATR)",  minval=0.1, step=0.1, group=grp4, tooltip="Take profit = entry ± (ATR × this value). Default 2.0 = 2:1 R:R")
+trailActivePct = input.float(80.0, "Trail Activation (% of TP reached)", minval=1, maxval=99, step=1, group=grp4,
+     tooltip="Trailing stop activates when price has moved this % toward TP. Default: 80%.")
+trailLockPct   = input.float(10.0, "Trail Lock Level (% of TP from entry)", minval=0, maxval=50, step=1, group=grp4,
+     tooltip="Once activated, the trailing stop is placed at this % of the TP range above entry (breakeven protection). Default: 10%.")
+
+grp5 = "── Display ──"
+showEMAs    = input.bool(true,  "Show EMAs",          group=grp5)
+showVWAP    = input.bool(true,  "Show VWAP",          group=grp5)
+showSignals = input.bool(true,  "Show Entry Signals", group=grp5)
+showLevels  = input.bool(true,  "Show SL/TP Lines",   group=grp5)
+
+grp6 = "── Trade Direction ──"
+allowLong   = input.bool(true,  "Allow Long  Trades", group=grp6)
+allowShort  = input.bool(true,  "Allow Short Trades", group=grp6)
+
+// ──────────────────────────────────────────────────────────────────
+//  INDICATORS
+// ──────────────────────────────────────────────────────────────────
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+rsiVal   = ta.rsi(close, rsiLen)
+atrVal   = ta.atr(atrLen)
+vwapVal  = ta.vwap(hlc3)
+volMA    = ta.sma(volume, volMaLen)
+
+// ──────────────────────────────────────────────────────────────────
+//  ENTRY CONDITIONS
+// ──────────────────────────────────────────────────────────────────
+
+// Trend alignment
+bullStack   = emaFast > emaSlow
+bearStack   = emaFast < emaSlow
+
+// VWAP filter
+aboveVWAP   = close > vwapVal
+belowVWAP   = close < vwapVal
+
+// RSI filter
+rsiBullZone = rsiVal >= rsiLongMin  and rsiVal <= rsiLongMax
+rsiBearZone = rsiVal >= rsiShortMin and rsiVal <= rsiShortMax
+
+// Volume confirmation
+volConfirm  = not useVolume or (volume > volMA * volMulti)
+
+// Price action: EMA8 bounce entry
+// Long  = price was at or below EMA8 on prev bar, now closes above it
+// Short = price was at or above EMA8 on prev bar, now closes below it
+emaBounceUp   = low[1] <= emaFast[1] and close > emaFast
+emaBounceDown = high[1] >= emaFast[1] and close < emaFast
+
+// Final entry signals
+longCondition  = allowLong
+             and bullStack
+             and rsiBullZone
+             and (not useVWAP or aboveVWAP)
+             and volConfirm
+             and emaBounceUp
+             and strategy.position_size == 0        // flat only
+
+shortCondition = allowShort
+             and bearStack
+             and rsiBearZone
+             and (not useVWAP or belowVWAP)
+             and volConfirm
+             and emaBounceDown
+             and strategy.position_size == 0
+
+// ──────────────────────────────────────────────────────────────────
+//  SL / TP LEVELS
+// ──────────────────────────────────────────────────────────────────
+var float entryPrice  = na
+var float longSL      = na
+var float longTP      = na
+var float shortSL     = na
+var float shortTP     = na
+var float tpRange     = na   // absolute distance from entry to TP
+
+// Capture levels at entry
+if longCondition
+    entryPrice := close
+    longSL     := close - atrVal * slMult
+    longTP     := close + atrVal * tpMult
+    tpRange    := longTP - close
+
+if shortCondition
+    entryPrice := close
+    shortSL    := close + atrVal * slMult
+    shortTP    := close - atrVal * tpMult
+    tpRange    := close - shortTP
+
+// ──────────────────────────────────────────────────────────────────
+//  TRAILING STOP ENGINE
+//  Logic:
+//   1. Trail is INACTIVE until price reaches (trailActivePct)% of TP
+//   2. On activation: trail level = entry + (trailLockPct)% of TP range
+//      → This guarantees a small profit even if price reverses
+//   3. Once active: trail level moves with price, never retracts
+//   4. Trail offset = activation price - lock level
+//      → Maintained as a fixed distance behind highest (long) / lowest (short)
+// ──────────────────────────────────────────────────────────────────
+var bool  trailActive      = false
+var float trailStopLevel   = na
+var float trailOffset      = na     // distance to trail behind price extremes
+var float highestSinceTail = na
+var float lowestSinceTrail = na
+
+// Reset all state on new entry
+if longCondition or shortCondition
+    trailActive      := false
+    trailStopLevel   := na
+    trailOffset      := na
+    highestSinceTail := na
+    lowestSinceTrail := na
+
+// ── Long trailing stop ─────────────────────────────────────────────
+if strategy.position_size > 0
+    activationPrice = entryPrice + tpRange * (trailActivePct / 100.0)
+    lockLevel       = entryPrice + tpRange * (trailLockPct  / 100.0)
+
+    // Step 1: Activate trail when price reaches activation threshold
+    if not trailActive and close >= activationPrice
+        trailActive      := true
+        trailStopLevel   := lockLevel
+        trailOffset      := activationPrice - lockLevel   // fixed gap to maintain
+        highestSinceTail := close
+
+    // Step 2: Once active — trail upward with the highest close
+    if trailActive
+        highestSinceTail := math.max(highestSinceTail, close)
+        newTrail          = highestSinceTail - trailOffset
+        trailStopLevel   := math.max(trailStopLevel, newTrail)   // only move UP
+
+    // Step 3: Exit if trailing stop is hit
+    if trailActive and close <= trailStopLevel
+        strategy.close("Long", comment="🔒 Trail Stop")
+
+// ── Short trailing stop ────────────────────────────────────────────
+if strategy.position_size < 0
+    activationPrice = entryPrice - tpRange * (trailActivePct / 100.0)
+    lockLevel       = entryPrice - tpRange * (trailLockPct  / 100.0)
+
+    if not trailActive and close <= activationPrice
+        trailActive      := true
+        trailStopLevel   := lockLevel
+        trailOffset      := lockLevel - activationPrice
+        lowestSinceTrail := close
+
+    if trailActive
+        lowestSinceTrail := math.min(lowestSinceTrail, close)
+        newTrail          = lowestSinceTrail + trailOffset
+        trailStopLevel   := math.min(trailStopLevel, newTrail)   // only move DOWN
+
+    if trailActive and close >= trailStopLevel
+        strategy.close("Short", comment="🔒 Trail Stop")
+
+// ──────────────────────────────────────────────────────────────────
+//  STRATEGY ORDERS
+// ──────────────────────────────────────────────────────────────────
+if longCondition
+    strategy.entry("Long", strategy.long, comment="▲ LONG")
+    strategy.exit("Long Exit", "Long",
+         stop          = longSL,
+         limit         = longTP,
+         comment_loss  = "✂ SL Hit",
+         comment_profit= "🎯 TP Hit")
+
+if shortCondition
+    strategy.entry("Short", strategy.short, comment="▼ SHORT")
+    strategy.exit("Short Exit", "Short",
+         stop          = shortSL,
+         limit         = shortTP,
+         comment_loss  = "✂ SL Hit",
+         comment_profit= "🎯 TP Hit")
+
+// ──────────────────────────────────────────────────────────────────
+//  PLOTTING
+// ──────────────────────────────────────────────────────────────────
+
+// EMAs
+emaFastPlot = plot(showEMAs ? emaFast : na, "EMA 8",  color=color.new(color.yellow, 0), linewidth=2)
+emaSlowPlot = plot(showEMAs ? emaSlow : na, "EMA 21", color=color.new(color.white,  30), linewidth=2)
+fill(emaFastPlot, emaSlowPlot,
+     color = emaFast > emaSlow
+             ? color.new(color.teal,  88)
+             : color.new(color.purple,88),
+     title = "EMA Zone")
+
+// VWAP
+plot(showVWAP ? vwapVal : na, "VWAP", color=color.new(color.aqua, 20), linewidth=1, style=plot.style_circles)
+
+// Entry Signals
+plotshape(longCondition  and showSignals, title="Long",  style=shape.labelup,
+     location=location.belowbar, color=color.new(color.lime,  0), textcolor=color.black, size=size.small, text="L")
+plotshape(shortCondition and showSignals, title="Short", style=shape.labeldown,
+     location=location.abovebar, color=color.new(color.red,   0), textcolor=color.white, size=size.small, text="S")
+
+// SL / TP price lines (only while in position)
+plot(showLevels and strategy.position_size > 0 ? longSL : na, "Long SL",  color=color.new(color.red,   10), style=plot.style_linebr, linewidth=2)
+plot(showLevels and strategy.position_size > 0 ? longTP : na, "Long TP",  color=color.new(color.green, 10), style=plot.style_linebr, linewidth=2)
+plot(showLevels and strategy.position_size < 0 ? shortSL: na, "Short SL", color=color.new(color.red,   10), style=plot.style_linebr, linewidth=2)
+plot(showLevels and strategy.position_size < 0 ? shortTP: na, "Short TP", color=color.new(color.green, 10), style=plot.style_linebr, linewidth=2)
+
+// Trailing stop line (highlighted when active)
+trailColor = trailActive ? color.new(color.orange, 0) : color.new(color.orange, 80)
+plot(showLevels and strategy.position_size != 0 and not na(trailStopLevel) ? trailStopLevel : na,
+     "Trail Stop", color=trailColor, style=plot.style_linebr, linewidth=2)
+
+// Trail activation zone (shaded area between entry and activation level)
+trailActivationLong  = strategy.position_size > 0 ? entryPrice + tpRange * (trailActivePct / 100.0) : na
+trailActivationShort = strategy.position_size < 0 ? entryPrice - tpRange * (trailActivePct / 100.0) : na
+plot(showLevels ? trailActivationLong  : na, "Trail Activation (L)", color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
+plot(showLevels ? trailActivationShort : na, "Trail Activation (S)", color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
+
+// Background: highlight when trail is active
+bgcolor(trailActive and strategy.position_size > 0 ? color.new(color.orange, 94) : na, title="Trail Active (Long)")
+bgcolor(trailActive and strategy.position_size < 0 ? color.new(color.orange, 94) : na, title="Trail Active (Short)")
+
+// ──────────────────────────────────────────────────────────────────
+//  INFO TABLE — top right
+// ──────────────────────────────────────────────────────────────────
+var table t = table.new(position.top_right, 2, 9,
+     bgcolor=color.new(color.black, 65), border_color=color.new(color.gray, 50), border_width=1)
+
+if barstate.islast
+    posStr    = strategy.position_size > 0 ? "▲ LONG"  : strategy.position_size < 0 ? "▼ SHORT" : "— FLAT"
+    posCol    = strategy.position_size > 0 ? color.lime : strategy.position_size < 0 ? color.red  : color.gray
+    trailStr  = trailActive ? "✅ ACTIVE" : "⏳ WAITING"
+    trailCol  = trailActive ? color.orange : color.gray
+    emaStr    = emaFast > emaSlow ? "Bullish ▲" : "Bearish ▼"
+    emaCol    = emaFast > emaSlow ? color.teal : color.purple
+    vwapStr   = close > vwapVal ? "Above ▲" : "Below ▼"
+    vwapCol   = close > vwapVal ? color.lime : color.red
+
+    table.cell(t, 0, 0, "Position",     text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 0, posStr,         text_color=posCol,       text_size=size.small)
+    table.cell(t, 0, 1, "EMA Trend",    text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 1, emaStr,         text_color=emaCol,       text_size=size.small)
+    table.cell(t, 0, 2, "VWAP",         text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 2, vwapStr,        text_color=vwapCol,      text_size=size.small)
+    table.cell(t, 0, 3, "RSI(7)",       text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 3, str.tostring(rsiVal, "#.1"),   text_color=color.white,  text_size=size.small)
+    table.cell(t, 0, 4, "ATR",          text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 4, str.tostring(atrVal, "#.2"),   text_color=color.white,  text_size=size.small)
+    table.cell(t, 0, 5, "Vol Filter",   text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 5, volume > volMA * volMulti ? "✅ OK" : "❌ Low",
+                                         text_color=volume > volMA * volMulti ? color.lime : color.red, text_size=size.small)
+    table.cell(t, 0, 6, "Trail Stop",   text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 6, trailStr,       text_color=trailCol,     text_size=size.small)
+    table.cell(t, 0, 7, "SL Level",     text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 7, strategy.position_size != 0 ? str.tostring(strategy.position_size > 0 ? longSL : shortSL, "#.2") : "—",
+                                         text_color=color.red,    text_size=size.small)
+    table.cell(t, 0, 8, "TP Level",     text_color=color.silver, text_size=size.small)
+    table.cell(t, 1, 8, strategy.position_size != 0 ? str.tostring(strategy.position_size > 0 ? longTP : shortTP, "#.2") : "—",
+                                         text_color=color.green,  text_size=size.small)
+
+// ──────────────────────────────────────────────────────────────────
+//  ALERTS
+// ──────────────────────────────────────────────────────────────────
+alertcondition(longCondition,  title="Scalp Long",  message="[SCALP 5M] ▲ LONG entry — EMA bounce + RSI + VWAP + Volume confirmed. ATR SL/TP set.")
+alertcondition(shortCondition, title="Scalp Short", message="[SCALP 5M] ▼ SHORT entry — EMA rejection + RSI + VWAP + Volume confirmed. ATR SL/TP set.")
+alertcondition(trailActive and strategy.position_size > 0, title="Trail Active Long",  message="[SCALP 5M] 🔒 Trailing stop now ACTIVE on LONG — profit locked above breakeven.")
+alertcondition(trailActive and strategy.position_size < 0, title="Trail Active Short", message="[SCALP 5M] 🔒 Trailing stop now ACTIVE on SHORT — profit locked above breakeven.")
