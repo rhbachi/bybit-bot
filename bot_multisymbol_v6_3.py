@@ -383,6 +383,20 @@ def get_base_currency(symbol):
     """Extrait la devise de base d'un symbole. Ex: BTC/USDT:USDT → BTC"""
     return symbol.split('/')[0]
 
+def get_available_balance():
+    """Retourne la marge USDT disponible (free) sur le compte Unified/Linear Bybit."""
+    try:
+        balance = exchange.fetch_balance()
+        free = balance.get("USDT", {}).get("free", None)
+        if free is None:
+            # Fallback pour comptes Unified
+            free = balance.get("free", {}).get("USDT", None)
+        return float(free) if free is not None else None
+    except Exception as e:
+        logger.log_error("get_available_balance error", e)
+        return None
+
+
 def open_trade(symbol, side, price, atr, score):
     # Sécurité ultime : On ne rentre pas si déjà en position
     if has_open_position(symbol):
@@ -405,10 +419,10 @@ def open_trade(symbol, side, price, atr, score):
     min_tp_dist = price * 0.0050
     # On force le SL à être au moins à 0.30% pour ne pas couper avec le bruit
     min_sl_dist = price * 0.0030
-    
+
     sl_dist = max(atr * CURRENT_SL_MULTI, min_sl_dist)
     tp_dist = max(atr * CURRENT_TP_MULTI, min_tp_dist)
-    
+
     qty = calculate_position_size(price, sl_dist)
     if qty is None:
         return
@@ -417,6 +431,24 @@ def open_trade(symbol, side, price, atr, score):
     if qty is None:
         print(f"⚠️ {symbol} Qty too small after adjustment")
         return
+
+    # Vérification du solde réel disponible sur Bybit avant envoi de l'ordre
+    # Évite retCode:110007 quand CAPITAL > solde réel ou quand d'autres positions bloquent la marge
+    available = get_available_balance()
+    if available is not None:
+        required_margin = (qty * price) / LEVERAGE
+        # On garde 10% de tampon pour les frais et fluctuations
+        if required_margin > available * 0.90:
+            # Recalcul de la qty selon le solde réel (80% du disponible pour garder une marge de sécurité)
+            max_notional = available * 0.80 * LEVERAGE
+            new_qty = max_notional / price
+            new_qty = adjust_qty(symbol, new_qty, price)
+            if new_qty is None:
+                print(f"⚠️ {symbol} Solde insuffisant (dispo: {available:.2f} USDT, requis: {required_margin:.2f} USDT)")
+                last_trade_time[symbol] = time.time()  # cooldown pour éviter le spam
+                return
+            print(f"⚠️ {symbol} Qty réduite {qty} → {new_qty} (marge dispo: {available:.2f} USDT)")
+            qty = new_qty
 
     if side == "long":
         sl = price - sl_dist
@@ -497,6 +529,8 @@ def open_trade(symbol, side, price, atr, score):
     except Exception as e:
         logger.log_error(f"Trade error {symbol}", e)
         send_telegram(f"❌ Error opening {symbol}: {str(e)}")
+        # Cooldown après échec pour éviter le spam de tentatives
+        last_trade_time[symbol] = time.time()
 
 # ================= OPEN TRADE SNIPER ================
 
@@ -609,6 +643,7 @@ def open_trade_sniper(symbol, side, price, sl_distance, score):
     except Exception as e:
         logger.log_error(f"Sniper trade error {symbol}", e)
         send_telegram(f"❌ Sniper error {symbol}: {str(e)}")
+        last_trade_time[symbol] = time.time()
 
 
 # ================= RISK GUARDS =================
