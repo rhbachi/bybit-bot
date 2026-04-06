@@ -192,23 +192,22 @@ def is_sniper_session():
 
 # ================= POSITION SIZE =================
 
-def calculate_position_size(price, stop_distance):
+def calculate_position_size(price, stop_distance, capital=None):
     if stop_distance <= 0:
         return None
-        
-    risk_amount = CAPITAL * RISK_PER_TRADE
-    
+
+    effective_capital = capital if capital is not None else CAPITAL
+
+    risk_amount = effective_capital * RISK_PER_TRADE
     qty = (risk_amount / stop_distance) * LEVERAGE
-    
-    qty = (risk_amount / stop_distance) * LEVERAGE
-    
-    # Sécurité : Max 25% du capital par position
-    max_position_value = CAPITAL * LEVERAGE * 0.25
+
+    # Sécurité : Max 25% du capital effectif par position
+    max_position_value = effective_capital * LEVERAGE * 0.25
     max_qty = max_position_value / price
-    
+
     if qty > max_qty:
         qty = max_qty
-        
+
     return qty
 
 # ================= PRECISION FIX =================
@@ -415,6 +414,16 @@ def open_trade(symbol, side, price, atr, score):
             print(f"🚫 [{symbol}] Position déjà ouverte sur {open_sym} (même base: {base}), ouverture annulée.")
             return
 
+    # Solde réel disponible sur Bybit — utilisé comme capital effectif pour le sizing
+    available = get_available_balance()
+    if available is None:
+        print(f"⚠️ {symbol} Impossible de récupérer le solde, utilisation de CAPITAL={CAPITAL}")
+        effective_capital = CAPITAL
+    else:
+        # On utilise 90% du solde libre pour garder un tampon de frais
+        effective_capital = available * 0.90
+        print(f"💰 {symbol} Capital effectif: {effective_capital:.2f} USDT (solde libre: {available:.2f} USDT)")
+
     # On force le TP à être au moins à 0.50% du prix pour couvrir les frais (0.075%) et faire du profit
     min_tp_dist = price * 0.0050
     # On force le SL à être au moins à 0.30% pour ne pas couper avec le bruit
@@ -423,32 +432,15 @@ def open_trade(symbol, side, price, atr, score):
     sl_dist = max(atr * CURRENT_SL_MULTI, min_sl_dist)
     tp_dist = max(atr * CURRENT_TP_MULTI, min_tp_dist)
 
-    qty = calculate_position_size(price, sl_dist)
+    qty = calculate_position_size(price, sl_dist, capital=effective_capital)
     if qty is None:
         return
 
     qty = adjust_qty(symbol, qty, price)
     if qty is None:
-        print(f"⚠️ {symbol} Qty too small after adjustment")
+        print(f"⚠️ {symbol} Qty too small after adjustment (capital: {effective_capital:.2f} USDT)")
+        last_trade_time[symbol] = time.time()
         return
-
-    # Vérification du solde réel disponible sur Bybit avant envoi de l'ordre
-    # Évite retCode:110007 quand CAPITAL > solde réel ou quand d'autres positions bloquent la marge
-    available = get_available_balance()
-    if available is not None:
-        required_margin = (qty * price) / LEVERAGE
-        # On garde 10% de tampon pour les frais et fluctuations
-        if required_margin > available * 0.90:
-            # Recalcul de la qty selon le solde réel (80% du disponible pour garder une marge de sécurité)
-            max_notional = available * 0.80 * LEVERAGE
-            new_qty = max_notional / price
-            new_qty = adjust_qty(symbol, new_qty, price)
-            if new_qty is None:
-                print(f"⚠️ {symbol} Solde insuffisant (dispo: {available:.2f} USDT, requis: {required_margin:.2f} USDT)")
-                last_trade_time[symbol] = time.time()  # cooldown pour éviter le spam
-                return
-            print(f"⚠️ {symbol} Qty réduite {qty} → {new_qty} (marge dispo: {available:.2f} USDT)")
-            qty = new_qty
 
     if side == "long":
         sl = price - sl_dist
@@ -555,18 +547,27 @@ def open_trade_sniper(symbol, side, price, sl_distance, score):
             print(f"🚫 [{symbol}] Position déjà ouverte sur {open_sym} (même base: {base}).")
             return
 
+    # Solde réel disponible sur Bybit — capital effectif pour le sizing
+    available = get_available_balance()
+    if available is None:
+        print(f"⚠️ {symbol} Sniper: impossible de récupérer le solde, utilisation de CAPITAL={CAPITAL}")
+        effective_capital = CAPITAL
+    else:
+        effective_capital = available * 0.90
+
     # Sécurité minimale sur le SL
     min_sl = price * 0.0005
     sl_dist = max(sl_distance, min_sl)
     tp_dist = sl_dist * SNIPER_RR   # RR 2.0
 
-    qty = calculate_position_size(price, sl_dist)
+    qty = calculate_position_size(price, sl_dist, capital=effective_capital)
     if qty is None:
         return
 
     qty = adjust_qty(symbol, qty, price)
     if qty is None:
-        print(f"⚠️ {symbol} Sniper: qty trop petite après ajustement")
+        print(f"⚠️ {symbol} Sniper: qty trop petite après ajustement (capital: {effective_capital:.2f} USDT)")
+        last_trade_time[symbol] = time.time()
         return
 
     if side == 'long':
