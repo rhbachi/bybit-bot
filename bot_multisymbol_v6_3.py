@@ -383,17 +383,49 @@ def get_base_currency(symbol):
     return symbol.split('/')[0]
 
 def get_available_balance():
-    """Retourne la marge USDT disponible (free) sur le compte Unified/Linear Bybit."""
+    """
+    Retourne la marge USDT réellement disponible pour de nouveaux ordres.
+    Utilise l'endpoint V5 Bybit qui tient compte des positions ouvertes et
+    de la marge gelée — plus fiable que fetch_balance() pour les comptes Unified.
+    """
+    try:
+        resp = exchange.private_get_v5_account_wallet_balance({
+            "accountType": "UNIFIED"
+        })
+        coins = resp.get("result", {}).get("list", [{}])[0].get("coin", [])
+        for coin in coins:
+            if coin.get("coin") == "USDT":
+                # availableToWithdraw = solde libre après marge gelée
+                avail = coin.get("availableToWithdraw") or coin.get("availableToBorrow")
+                if avail is not None:
+                    return float(avail)
+    except Exception:
+        pass
+
+    # Fallback : compte CONTRACT (non-unified)
+    try:
+        resp = exchange.private_get_v5_account_wallet_balance({
+            "accountType": "CONTRACT"
+        })
+        coins = resp.get("result", {}).get("list", [{}])[0].get("coin", [])
+        for coin in coins:
+            if coin.get("coin") == "USDT":
+                avail = coin.get("availableToWithdraw")
+                if avail is not None:
+                    return float(avail)
+    except Exception:
+        pass
+
+    # Dernier fallback : ccxt standard
     try:
         balance = exchange.fetch_balance()
-        free = balance.get("USDT", {}).get("free", None)
-        if free is None:
-            # Fallback pour comptes Unified
-            free = balance.get("free", {}).get("USDT", None)
-        return float(free) if free is not None else None
+        free = balance.get("USDT", {}).get("free") or balance.get("free", {}).get("USDT")
+        if free is not None:
+            return float(free)
     except Exception as e:
         logger.log_error("get_available_balance error", e)
-        return None
+
+    return None
 
 
 def open_trade(symbol, side, price, atr, score):
@@ -441,6 +473,15 @@ def open_trade(symbol, side, price, atr, score):
         print(f"⚠️ {symbol} Qty too small after adjustment (capital: {effective_capital:.2f} USDT)")
         last_trade_time[symbol] = time.time()
         return
+
+    # Vérification finale : marge requise vs solde réellement disponible
+    # (garde-fou contre race condition ou valeur de balance obsolète)
+    if available is not None and available > 0:
+        required_margin = (qty * price) / LEVERAGE
+        if required_margin > available * 0.85:
+            print(f"🚫 {symbol} Marge insuffisante: requis {required_margin:.2f} USDT > dispo {available:.2f} USDT, ordre annulé.")
+            last_trade_time[symbol] = time.time()
+            return
 
     if side == "long":
         sl = price - sl_dist
