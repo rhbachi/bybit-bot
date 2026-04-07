@@ -6,14 +6,22 @@ from datetime import datetime, timedelta
 # Import the strategies
 import strategy_v6 as strat_v6
 import strategy_v7_robust as strat_v7
+import strategy_scalping_5m as strat_scalp5m
 
 class AutoTuner:
     def __init__(self, exchange_client, logger_instance):
         self.exchange = exchange_client
         self.logger = logger_instance
         self.strategies = {
-            'v6_aggressive': (strat_v6.apply_indicators, strat_v6.check_signal),
-            'v7_robust': (strat_v7.apply_indicators, strat_v7.check_signal)
+            'scalping_5m':   (strat_scalp5m.apply_indicators, strat_scalp5m.check_signal),
+            'v6_aggressive': (strat_v6.apply_indicators,      strat_v6.check_signal),
+            'v7_robust':     (strat_v7.apply_indicators,      strat_v7.check_signal),
+        }
+        # Timeframe required by each strategy (used when fetching backtest data)
+        self.strategy_timeframe = {
+            'scalping_5m':   '5m',
+            'v6_aggressive': None,   # uses bot default timeframe
+            'v7_robust':     None,
         }
         
         # Define parameter grids to test
@@ -24,12 +32,13 @@ class AutoTuner:
             {'sl_multi': 1.2, 'tp_multi': 2.4, 'threshold': 3},
         ]
 
-    def fetch_historical_data(self, symbol, timeframe, hours=24):
+    def fetch_historical_data(self, symbol, timeframe, hours=48):
         """Fetch historical OHLCV data for backtesting."""
         try:
-            # Estimate number of candles based on timeframe
-            limit = hours * 60 if timeframe == '1m' else hours * 12 # Approximation
-            
+            tf_minutes = {'1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240}
+            mins = tf_minutes.get(timeframe, 1)
+            limit = min(int(hours * 60 / mins), 1000)
+
             ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
             return df
@@ -75,13 +84,14 @@ class AutoTuner:
         """Run a quick backtest for a specific strategy and parameter set."""
         apply_ind, check_sig = self.strategies[strat_name]
         df_ind = apply_ind(df.copy())
-        
+
         pnl_atr = 0
         trades_count = 0
         wins = 0
-        
-        # Start scanning after enough data for indicators (e.g., EMA 200)
-        start_idx = 200 if strat_name == 'v7_robust' else 25
+
+        # Warm-up bars needed per strategy
+        warmup = {'v7_robust': 200, 'scalping_5m': 110}
+        start_idx = warmup.get(strat_name, 25)
         
         if len(df_ind) <= start_idx:
             return -999, 0 # Not enough data
@@ -105,9 +115,11 @@ class AutoTuner:
             return -999, 0
         return pnl_atr, win_rate
 
-    def get_best_configuration(self, symbols, timeframe):
+    def get_best_configuration(self, symbols, default_timeframe):
         """Determine the best strategy and parameters based on recent data.
-        Backtests on up to 3 symbols and averages results to avoid overfitting."""
+        Backtests on up to 3 symbols and averages results to avoid overfitting.
+        Returns None if no config beats the quality threshold — caller keeps
+        the current strategy in that case."""
         test_symbols = symbols[:3] if isinstance(symbols, list) else [symbols]
 
         best_pnl = -float('inf')
@@ -115,14 +127,17 @@ class AutoTuner:
         results_log = []
 
         for strat_name in self.strategies.keys():
+            # Each strategy is tested on its own required timeframe
+            tf = self.strategy_timeframe.get(strat_name) or default_timeframe
+
             for params in self.param_grid:
                 total_pnl = 0.0
                 total_wr = 0.0
                 valid_count = 0
 
                 for sym in test_symbols:
-                    df = self.fetch_historical_data(sym, timeframe, hours=48)
-                    if df.empty or len(df) < 200:
+                    df = self.fetch_historical_data(sym, tf, hours=48)
+                    if df.empty or len(df) < 110:
                         continue
                     pnl, win_rate = self.backtest_strategy(df, strat_name, params)
                     if pnl == -999:
@@ -137,10 +152,12 @@ class AutoTuner:
                 avg_pnl = total_pnl / valid_count
                 avg_wr = total_wr / valid_count
 
-                results_log.append(f"{strat_name} {params}: PnL={avg_pnl:.2f} ATR, WR={avg_wr:.1f}% (n={valid_count})")
+                results_log.append(
+                    f"{strat_name} [{tf}] {params}: PnL={avg_pnl:.2f} ATR, WR={avg_wr:.1f}% (n={valid_count})"
+                )
 
-                # Require win rate >= 40% to avoid lucky low-sample configs
-                if avg_wr < 40.0:
+                # Require win rate >= 40% AND positive PnL
+                if avg_wr < 40.0 or avg_pnl <= 0:
                     continue
                 if avg_pnl > best_pnl:
                     best_pnl = avg_pnl
@@ -155,13 +172,9 @@ class AutoTuner:
         for res in results_log:
             print(f"🔍 Tuner check: {res}")
 
-        if best_pnl > 0 and best_config:
+        if best_config:
             return best_config
 
-        # If nothing is profitable, default to robust strategy to protect capital
-        return {
-            'strategy': 'v7_robust',
-            'params': self.param_grid[0], # Default safe params
-            'expected_pnl': 0,
-            'expected_wr': 0
-        }
+        # Nothing qualifies — return None so the bot keeps its current strategy
+        print("🔍 Tuner: aucune config qualifiée, stratégie actuelle conservée.")
+        return None

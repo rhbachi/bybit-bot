@@ -835,14 +835,14 @@ def bot_loop():
                 if best_config:
                     new_strat = best_config['strategy']
                     p = best_config['params']
-                    
-                    # Log & Update if changed
+
+                    # Only switch if meaningfully different
                     if new_strat != ACTIVE_STRATEGY or p['sl_multi'] != CURRENT_SL_MULTI or p['threshold'] != CURRENT_THRESHOLD:
                         ACTIVE_STRATEGY = new_strat
                         CURRENT_SL_MULTI = p['sl_multi']
                         CURRENT_TP_MULTI = p['tp_multi']
                         CURRENT_THRESHOLD = p['threshold']
-                        
+
                         msg = (f"🔄 AUTO-TUNER ACTIF 🔄\n"
                                f"Nouvelle Strat: {ACTIVE_STRATEGY}\n"
                                f"SL Multi: {CURRENT_SL_MULTI}x\n"
@@ -852,6 +852,10 @@ def bot_loop():
                                f"Expected PnL: {best_config['expected_pnl']:.2f} ATR")
                         print(msg, flush=True)
                         send_telegram(msg)
+                    else:
+                        print("🔍 Auto-Tuner: config actuelle déjà optimale, pas de changement.", flush=True)
+                else:
+                    print("🔍 Auto-Tuner: aucune meilleure config trouvée, stratégie conservée.", flush=True)
                 
                 LAST_TUNE_TRADES = total_trades
         except Exception as e:
