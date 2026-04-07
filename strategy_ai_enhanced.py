@@ -15,29 +15,44 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # =========================
-# ÉTAT GLOBAL
+# ÉTAT PAR SYMBOLE (dict keyed by symbol)
+# Remplace les globaux partagés qui causaient des interférences entre symboles
 # =========================
-_last_bios_level = None  # Dernier Break of Structure
-_last_bios_direction = None
-_ote_active = False
-_ote_entry_zone = None  # (zone_basse, zone_haute)
+_symbol_states = {}  # { symbol: { bios_level, bios_direction, ote_active, ote_entry_zone } }
 
-def reset_state():
-    """Réinitialise l'état de la stratégie"""
-    global _last_bios_level, _last_bios_direction, _ote_active, _ote_entry_zone
-    _last_bios_level = None
-    _last_bios_direction = None
-    _ote_active = False
-    _ote_entry_zone = None
+def _get_sym_state(symbol):
+    if symbol not in _symbol_states:
+        _symbol_states[symbol] = {
+            'bios_level': None,
+            'bios_direction': None,
+            'ote_active': False,
+            'ote_entry_zone': None,
+        }
+    return _symbol_states[symbol]
 
-def get_state():
+def reset_state(symbol=None):
+    """Réinitialise l'état — par symbole si fourni, sinon tout."""
+    if symbol:
+        _symbol_states[symbol] = {
+            'bios_level': None,
+            'bios_direction': None,
+            'ote_active': False,
+            'ote_entry_zone': None,
+        }
+    else:
+        _symbol_states.clear()
+
+def get_state(symbol=None):
     """Retourne l'état actuel pour debug"""
-    return {
-        'bios_level': _last_bios_level,
-        'bios_direction': _last_bios_direction,
-        'ote_active': _ote_active,
-        'ote_zone': _ote_entry_zone
-    }
+    if symbol:
+        s = _get_sym_state(symbol)
+        return {
+            'bios_level':     s['bios_level'],
+            'bios_direction': s['bios_direction'],
+            'ote_active':     s['ote_active'],
+            'ote_zone':       s['ote_entry_zone'],
+        }
+    return _symbol_states
 
 def log_signal_to_file(signal_data):
     """Enregistre un signal dans le fichier CSV du dashboard"""
@@ -306,19 +321,19 @@ def apply_indicators(df):
 
 def detect_trend(df):
     """
-    Détecte la tendance principale avec EMA 20/50
+    Détecte la tendance principale avec EMA 20/50.
+    Condition assouplie : seul l'alignement EMA20 vs EMA50 est requis,
+    pas la position du prix (évite les faux None en range).
     """
     last = df.iloc[-1]
 
     if pd.isna(last['ema20']) or pd.isna(last['ema50']):
         return None
 
-    # Tendance haussière (Golden Cross / Alignement)
-    if last['ema20'] > last['ema50'] and last['close'] > last['ema20']:
+    if last['ema20'] > last['ema50']:
         return 'bullish'
 
-    # Tendance baissière (Death Cross / Alignement)
-    if last['ema20'] < last['ema50'] and last['close'] < last['ema20']:
+    if last['ema20'] < last['ema50']:
         return 'bearish'
 
     return None
@@ -412,157 +427,124 @@ def calculate_sl_tp_adaptive(entry_price, side, df):
 
     return round(sl_price, 2), round(tp_price, 2), atr_pct
 
-def debug_check_signal(df):
-    """Version debug de check_signal qui explique pourquoi pas de signal"""
+def debug_check_signal(df, symbol=None):
+    """
+    Évalue le signal BIOS/OTE/Momentum pour un symbole donné.
+    L'état de la machine à états est isolé par symbole (plus d'interférence
+    entre les 10 symboles du bot multi-symbol).
+    """
+    sym = symbol or os.getenv('SYMBOL', 'UNKNOWN')
 
-    # Créer les données de base pour le signal
     signal_data = {
         'bot_name': 'ZONE2_AI',
-        'symbol': os.getenv('SYMBOL', 'UNKNOWN'),
+        'symbol': sym,
         'timestamp': datetime.now().isoformat(),
         'price': df['close'].iloc[-1] if not df.empty else 0,
         'trend': 'unknown',
-        'rsi': 0,
-        'macd': 0,
-        'stoch_k': 0,
-        'stoch_d': 0,
-        'bb_position': 0,
-        'ote_zone': False,
-        'bios_detected': False,
-        'signal_strength': 0,
-        'executed': False,
-        'reason_not_executed': ''
+        'rsi': 0, 'macd': 0, 'stoch_k': 0, 'stoch_d': 0,
+        'bb_position': 0, 'ote_zone': False, 'bios_detected': False,
+        'signal_strength': 0, 'executed': False, 'reason_not_executed': ''
     }
 
     if len(df) < 50:
-        logger.info("❌ Pas assez de données: %d/50 bougies", len(df))
         signal_data['reason_not_executed'] = 'Pas assez de données'
         log_signal_to_file(signal_data)
         return None
 
-    # Appliquer indicateurs
     df = apply_indicators(df)
-
-    # Mettre à jour les valeurs des indicateurs
     last = df.iloc[-1]
-    signal_data['rsi'] = last.get('rsi', 0)
-    signal_data['macd'] = last.get('macd', 0)
+
+    signal_data['rsi']     = last.get('rsi', 0)
+    signal_data['macd']    = last.get('macd', 0)
     signal_data['stoch_k'] = last.get('stoch_k', 0)
     signal_data['stoch_d'] = last.get('stoch_d', 0)
 
-    # Calculer position BB
     if 'bb_upper' in last and 'bb_lower' in last:
         bb_range = last['bb_upper'] - last['bb_lower']
         if bb_range > 0:
             signal_data['bb_position'] = (last['close'] - last['bb_lower']) / bb_range
 
-    # Vérifier tendance
     trend = detect_trend(df)
-    signal_data['trend'] = trend if trend else 'unknown'
+    signal_data['trend'] = trend or 'unknown'
 
     if not trend:
-        logger.info("❌ Pas de tendance claire (EMA20/50)")
-        logger.info("   EMA20: %.2f, EMA50: %.2f, Close: %.2f",
-                   last.get('ema20',0), last.get('ema50',0), last['close'])
         signal_data['reason_not_executed'] = 'Pas de tendance claire'
         log_signal_to_file(signal_data)
-        reset_state()
+        reset_state(sym)
         return None
 
-    logger.info(f"✅ Tendance détectée: {trend}")
+    # ── État isolé par symbole ────────────────────────────────────────────────
+    state = _get_sym_state(sym)
 
-    # MACHINE À ÉTATS : BIOS -> OTE -> MOMENTUM
-    global _last_bios_level, _last_bios_direction, _ote_active, _ote_entry_zone
-
-    # Étape 1 : Détecter un nouveau Break of Structure (BIOS)
+    # Étape 1 : Détecter un nouveau BIOS dans le sens de la tendance
     bios = detect_bios(df)
-
     if bios and bios['direction'] == trend:
-        # Nouveau BIOS détecté dans le sens de la tendance
-        _last_bios_level = bios['level']
-        _last_bios_direction = bios['direction']
-
-        # Calcul de la zone OTE associée
         ote = detect_ote_zone(df, bios['direction'], bios['level'])
         if ote:
-            _ote_entry_zone = ote['entry_zone']
-            _ote_active = False  # On attend maintenant le pullback
-            logger.info(f"✅ Nouveau BIOS détecté à {_last_bios_level:.2f}. Zone OTE calculée: {_ote_entry_zone[0]:.2f}-{_ote_entry_zone[1]:.2f}")
+            state['bios_level']     = bios['level']
+            state['bios_direction'] = bios['direction']
+            state['ote_entry_zone'] = ote['entry_zone']
+            state['ote_active']     = False
+            logger.info(f"[{sym}] ✅ BIOS à {bios['level']:.2f} | OTE: {ote['entry_zone'][0]:.2f}-{ote['entry_zone'][1]:.2f}")
 
-    signal_data['bios_detected'] = _last_bios_level is not None
+    signal_data['bios_detected'] = state['bios_level'] is not None
 
-    # Étape 2 : Vérifier si on piste un setup
-    if not _last_bios_level or not _ote_entry_zone:
-        logger.info("❌ En attente d'un Break of Structure (BIOS)")
+    # Étape 2 : Vérifier qu'on a un setup en cours
+    if not state['bios_level'] or not state['ote_entry_zone']:
         signal_data['reason_not_executed'] = 'Pas de BIOS / Attente breakout'
         log_signal_to_file(signal_data)
         return None
 
-    # Invalidation si la tendance se retourne pendant qu'on attend
-    if trend != _last_bios_direction:
-        logger.info("❌ Tendance inversée, annulation du setup BIOS en cours")
-        reset_state()
+    # Invalidation si la tendance s'inverse
+    if trend != state['bios_direction']:
+        reset_state(sym)
         signal_data['reason_not_executed'] = 'Tendance inversée'
         log_signal_to_file(signal_data)
         return None
 
-    # Étape 3 : Vérifier le Pullback dans la zone OTE
+    # Étape 3 : Pullback dans la zone OTE
     current_price = df['close'].iloc[-1]
-    zone_low, zone_high = _ote_entry_zone
+    zone_low, zone_high = state['ote_entry_zone']
 
-    # On regarde si le prix "touche" ou est "dans" la zone
-    in_zone = zone_low <= current_price <= zone_high
-
-    if not _ote_active:
-        if in_zone:
-            _ote_active = True  # Le prix a touché la zone, elle est active pour un rebond
-            logger.info("✅ Le prix est entré dans la zone OTE ! Attente du momentum...")
+    if not state['ote_active']:
+        if zone_low <= current_price <= zone_high:
+            state['ote_active'] = True
+            logger.info(f"[{sym}] ✅ Prix dans la zone OTE — attente momentum...")
         else:
-            # On est toujours en attente du pullback
-            logger.info(f"❌ Attente du pullback dans l'OTE ({zone_low:.2f}-{zone_high:.2f}). Prix: {current_price:.2f}")
-            signal_data['reason_not_executed'] = 'Attente du Pullback (OTE)'
+            signal_data['reason_not_executed'] = f'Attente Pullback OTE ({zone_low:.2f}-{zone_high:.2f})'
             log_signal_to_file(signal_data)
             return None
 
-    # Si on arrive ici, la zone OTE est "active" (le pullback a eu lieu)
     signal_data['ote_zone'] = True
 
-    # Étape 4 : Vérifier la confirmation par le Momentum pour le rebond
+    # Étape 4 : Confirmation momentum
     signals = detect_momentum_signal(df, trend)
-    logger.info(f"   Signaux momentum: {signals}")
-
-    required = []
-    score = 0
     if trend == 'bullish':
         required = ['macd_bullish', 'rsi_healthy_bull', 'stoch_bullish']
-        score = sum(1 for s in required if s in signals)
     else:
         required = ['macd_bearish', 'rsi_healthy_bear', 'stoch_bearish']
-        score = sum(1 for s in required if s in signals)
 
-    logger.info(f"   Score momentum: {score}/3")
+    score = sum(1 for s in required if s in signals)
     signal_data['signal_strength'] = score
+    logger.info(f"[{sym}] Momentum {score}/3 — {signals}")
 
-    # On autorise l'entrée avec un score de 2/3 (assouplissement)
     if score < 2:
-        logger.info("❌ Pullback effectué mais Momentum insuffisant pour valider le rebond")
         signal_data['reason_not_executed'] = f'Momentum insuffisant ({score}/3)'
         log_signal_to_file(signal_data)
         return None
 
-    # SIGNAL TROUVÉ - retourne 'long' ou 'short' (Fix: was incorrectly returning 'bullish'/'bearish')
+    # ── Signal validé ────────────────────────────────────────────────────────
     result = 'long' if trend == 'bullish' else 'short'
-    logger.info(f"🎉 SIGNAL TROUVÉ: {result}")
+    reset_state(sym)
 
-    # On réinitialise l'état pour chercher le prochain setup après une entrée
-    reset_state()
-
-    signal_data['signal'] = result
-    signal_data['executed'] = True
-    signal_data['reason_not_executed'] = ''
+    signal_data['signal']               = result
+    signal_data['executed']             = True
+    signal_data['reason_not_executed']  = ''
     log_signal_to_file(signal_data)
 
+    logger.info(f"[{sym}] 🎉 SIGNAL: {result}")
     return result
+
 
 # Garder l'ancien nom pour la compatibilité
 check_signal = debug_check_signal

@@ -171,7 +171,7 @@ def load_state():
 # =========================
 # UTILS
 # =========================
-def fetch_ohlcv(symbol, limit=100):
+def fetch_ohlcv(symbol, limit=200):
     """Récupère les données OHLCV pour un symbole spécifique"""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=limit)
@@ -376,7 +376,8 @@ def check_signal_with_logging(symbol, df):
     from strategy_ai_enhanced import apply_indicators, check_signal, detect_trend, calculate_signal_strength
 
     df_with_indicators = apply_indicators(df)
-    signal = check_signal(df_with_indicators)
+    # Passe le symbole pour isoler l'état BIOS/OTE par symbole
+    signal = check_signal(df_with_indicators, symbol=symbol)
     reason_not_executed = "" if signal else "Pas de signal FVG/Fib"
 
     last_row = df_with_indicators.iloc[-1] if not df_with_indicators.empty else None
