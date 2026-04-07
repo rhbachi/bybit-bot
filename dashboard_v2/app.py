@@ -514,52 +514,189 @@ def render_market_scanner():
 
 def render_visual_backtester():
     st.title("🧪 Visual Strategy Backtester")
+
+    STRAT_OPTIONS = ["V6 Aggressive", "V7 Robust", "Scalping 5M", "Zone2 AI (BIOS/OTE)"]
+    STRAT_TF_HINTS = {
+        "Scalping 5M":        "5m",
+        "Zone2 AI (BIOS/OTE)": "5m",
+        "V6 Aggressive":      "1m",
+        "V7 Robust":          "1m",
+    }
+
     with st.form("backtest_form"):
         c1, c2, c3 = st.columns(3)
-        symbol = c1.text_input("Symbole", value="BTC/USDT")
-        tf = c2.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h", "4h"], index=1)
-        strat = c3.selectbox("Stratégie", ["V6 Aggressive", "V7 Robust"])
+        symbol   = c1.text_input("Symbole", value="BTC/USDT:USDT")
+        strat    = c3.selectbox("Stratégie", STRAT_OPTIONS, index=2)
+        tf_hint  = STRAT_TF_HINTS.get(strat, "5m")
+        tf_opts  = ["1m", "5m", "15m", "30m", "1h", "4h"]
+        tf       = c2.selectbox("Timeframe", tf_opts, index=tf_opts.index(tf_hint),
+                                help=f"Recommandé pour {strat}: {tf_hint}")
+
         p1, p2, p3 = st.columns(3)
-        sl_m = p1.number_input("SL ATR Multiplier", value=1.5, step=0.1)
-        tp_m = p2.number_input("TP ATR Multiplier", value=3.0, step=0.1)
-        score_th = p3.number_input("Score Threshold", value=3, min_value=1, max_value=5)
+        sl_m     = p1.number_input("SL ATR Multiplier", value=1.0 if strat == "Scalping 5M" else 1.5, step=0.1)
+        tp_m     = p2.number_input("TP ATR Multiplier", value=2.0 if strat == "Scalping 5M" else 3.0, step=0.1)
+        score_th = p3.number_input("Score Threshold", value=3, min_value=1, max_value=5,
+                                   help="Non utilisé pour Zone2 AI (seuil interne: 2/3 momentum)")
+        hours    = st.slider("Période (heures)", min_value=24, max_value=240, value=72, step=24)
         submitted = st.form_submit_button("▶️ Lancer la simulation", type="primary", use_container_width=True)
+
     if submitted:
         try:
             from config import exchange
             from auto_tuner import AutoTuner
-            with st.spinner(f"Récupération données..."):
-                tuner = AutoTuner(exchange, None)
-                df = tuner.fetch_historical_data(symbol, tf, hours=72)
-            if df is not None and not df.empty:
+
+            tuner = AutoTuner(exchange, None)
+            p = {'sl_multi': sl_m, 'tp_multi': tp_m, 'threshold': score_th}
+
+            with st.spinner("Récupération des données..."):
+                df_raw = tuner.fetch_historical_data(symbol, tf, hours=hours)
+
+            if df_raw is None or df_raw.empty:
+                st.error("Pas assez de données. Essaie un autre symbole ou timeframe.")
+                return
+
+            df_raw['timestamp'] = pd.to_datetime(df_raw['timestamp'], unit='ms')
+
+            # ── Scalping 5M ──────────────────────────────────────────────────
+            if strat == "Scalping 5M":
+                from strategy_scalping_5m import apply_indicators as apply_s5m, check_signal as check_s5m
+
+                with st.spinner("Simulation Scalping 5M..."):
+                    df = apply_s5m(df_raw.copy())
+                    buy_x, buy_y, sell_x, sell_y = [], [], [], []
+                    capital = 1000.0
+                    equity_curve, time_axis = [capital], [df['timestamp'].iloc[0]]
+                    wins, losses, total = 0, 0, 0
+                    start_idx = 110
+
+                    for i in range(start_idx, len(df) - 1):
+                        slice_df = df.iloc[:i+1]
+                        signal, score, atr = check_s5m(slice_df)
+                        if signal and score >= p['threshold'] and atr > 0:
+                            outcome = tuner.simulate_trade(df, i, signal, p)
+                            if outcome != 0:
+                                total += 1
+                                trade_pnl = outcome * atr * (capital * 0.02 / (atr * p['sl_multi']))
+                                capital += trade_pnl
+                                if outcome > 0: wins += 1; buy_x.append(df['timestamp'].iloc[i]); buy_y.append(df['close'].iloc[i])
+                                else:           losses += 1; sell_x.append(df['timestamp'].iloc[i]); sell_y.append(df['close'].iloc[i])
+                                equity_curve.append(capital)
+                                time_axis.append(df['timestamp'].iloc[i])
+
+            # ── Zone2 AI (BIOS/OTE) ──────────────────────────────────────────
+            elif strat == "Zone2 AI (BIOS/OTE)":
+                from strategy_ai_enhanced import (
+                    apply_indicators as apply_z2,
+                    check_signal as check_z2,
+                    reset_state,
+                )
+                BT_SYM = "__BACKTEST__"
+                reset_state(BT_SYM)
+
+                with st.spinner("Simulation Zone2 AI (stateful BIOS/OTE)..."):
+                    df_ind = apply_z2(df_raw.copy())  # pre-compute for simulate_trade ATR
+                    df = df_raw.copy()
+                    buy_x, buy_y, sell_x, sell_y = [], [], [], []
+                    capital = 1000.0
+                    equity_curve, time_axis = [capital], [df['timestamp'].iloc[0]]
+                    wins, losses, total = 0, 0, 0
+                    start_idx = 55  # EMA50 warmup
+
+                    for i in range(start_idx, len(df) - 1):
+                        slice_raw = df.iloc[:i+1]
+                        signal = check_z2(slice_raw, symbol=BT_SYM)
+                        if signal:
+                            atr = df_ind['atr'].iloc[i] if 'atr' in df_ind.columns else 0
+                            if atr <= 0:
+                                continue
+                            outcome = tuner.simulate_trade(df_ind, i, signal, p)
+                            if outcome != 0:
+                                total += 1
+                                trade_pnl = outcome * atr * (capital * 0.02 / (atr * p['sl_multi']))
+                                capital += trade_pnl
+                                if outcome > 0: wins += 1; buy_x.append(df['timestamp'].iloc[i]); buy_y.append(df['close'].iloc[i])
+                                else:           losses += 1; sell_x.append(df['timestamp'].iloc[i]); sell_y.append(df['close'].iloc[i])
+                                equity_curve.append(capital)
+                                time_axis.append(df['timestamp'].iloc[i])
+
+                reset_state(BT_SYM)
+
+            # ── V6 / V7 (logique existante) ───────────────────────────────────
+            else:
                 strat_name = 'v6_aggressive' if strat == "V6 Aggressive" else 'v7_robust'
-                p = {'sl_multi': sl_m, 'tp_multi': tp_m, 'threshold': score_th}
                 apply_ind, check_sig = tuner.strategies[strat_name]
-                df = apply_ind(df)
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                buy_x, buy_y, sell_x, sell_y, capital = [], [], [], [], 1000.0
-                equity_curve, time_axis = [capital], [df['timestamp'].iloc[0]]
-                start_idx = 200 if strat_name == 'v7_robust' else 25
-                for i in range(start_idx, len(df) - 1):
-                    slice_df = df.iloc[:i+1]
-                    signal, score, atr = check_sig(slice_df)
-                    if signal and score >= p['threshold']:
-                        outcome = tuner.simulate_trade(df, i, signal, p)
-                        if outcome != 0:
-                            capital += outcome * atr * (capital * 0.02 / (atr * p['sl_multi']))
-                            if signal == 'long': buy_x.append(df['timestamp'].iloc[i]); buy_y.append(df['close'].iloc[i])
-                            else: sell_x.append(df['timestamp'].iloc[i]); sell_y.append(df['close'].iloc[i])
-                            equity_curve.append(capital)
-                            time_axis.append(df['timestamp'].iloc[i])
-                st.subheader("📊 Price Action")
-                fig = go.Figure(data=[go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Prix')])
-                if buy_x: fig.add_trace(go.Scatter(x=buy_x, y=buy_y, mode='markers', marker=dict(symbol='triangle-up', size=12, color='#00FF88'), name='BUY'))
-                if sell_x: fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode='markers', marker=dict(symbol='triangle-down', size=12, color='#FF4B4B'), name='SELL'))
-                st.plotly_chart(fig, use_container_width=True)
-                roi = ((capital / 1000) - 1) * 100
-                st.metric("ROI Final", f"{roi:.2f}%", delta=f"{capital-1000:.2f} USDT")
+
+                with st.spinner(f"Simulation {strat}..."):
+                    df = apply_ind(df_raw.copy())
+                    df['timestamp'] = df_raw['timestamp']
+                    buy_x, buy_y, sell_x, sell_y = [], [], [], []
+                    capital = 1000.0
+                    equity_curve, time_axis = [capital], [df['timestamp'].iloc[0]]
+                    wins, losses, total = 0, 0, 0
+                    start_idx = 200 if strat_name == 'v7_robust' else 25
+
+                    for i in range(start_idx, len(df) - 1):
+                        slice_df = df.iloc[:i+1]
+                        signal, score, atr = check_sig(slice_df)
+                        if signal and score >= p['threshold'] and atr > 0:
+                            outcome = tuner.simulate_trade(df, i, signal, p)
+                            if outcome != 0:
+                                total += 1
+                                trade_pnl = outcome * atr * (capital * 0.02 / (atr * p['sl_multi']))
+                                capital += trade_pnl
+                                if outcome > 0: wins += 1; buy_x.append(df['timestamp'].iloc[i]); buy_y.append(df['close'].iloc[i])
+                                else:           losses += 1; sell_x.append(df['timestamp'].iloc[i]); sell_y.append(df['close'].iloc[i])
+                                equity_curve.append(capital)
+                                time_axis.append(df['timestamp'].iloc[i])
+
+            # ── Résultats communs ─────────────────────────────────────────────
+            wr = (wins / total * 100) if total > 0 else 0
+            roi = ((capital / 1000) - 1) * 100
+
+            # Métriques
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("ROI Final",   f"{roi:+.2f}%")
+            m2.metric("Capital",     f"{capital:.2f} USDT", delta=f"{capital-1000:+.2f}")
+            m3.metric("Trades",      total)
+            m4.metric("Win Rate",    f"{wr:.1f}%")
+            m5.metric("Gains/Pertes", f"{wins}W / {losses}L")
+
+            # Chart bougies + signaux
+            st.markdown('<div class="section-title">📊 Price Action & Signaux</div>', unsafe_allow_html=True)
+            fig = go.Figure(data=[go.Candlestick(
+                x=df['timestamp'], open=df['open'], high=df['high'],
+                low=df['low'], close=df['close'], name='Prix'
+            )])
+            if buy_x:
+                fig.add_trace(go.Scatter(x=buy_x, y=buy_y, mode='markers',
+                    marker=dict(symbol='triangle-up', size=12, color='#00FF88'), name='LONG'))
+            if sell_x:
+                fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode='markers',
+                    marker=dict(symbol='triangle-down', size=12, color='#FF4B4B'), name='SHORT'))
+            fig.update_layout(template="plotly_dark", height=420,
+                              margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Courbe equity
+            if len(equity_curve) > 1:
+                st.markdown('<div class="section-title">📈 Equity Curve</div>', unsafe_allow_html=True)
+                eq_color = ['#00FF88' if v >= 1000 else '#FF4B4B' for v in equity_curve]
+                fig_eq = go.Figure(go.Scatter(
+                    x=time_axis, y=equity_curve, mode='lines',
+                    line=dict(color='#00CC77', width=2),
+                    fill='tozeroy', fillcolor='rgba(0,200,100,0.08)',
+                    name='Equity'
+                ))
+                fig_eq.add_hline(y=1000, line_dash="dash", line_color="#666",
+                                 annotation_text="Capital initial")
+                fig_eq.update_layout(template="plotly_dark", height=250,
+                                     margin=dict(l=0, r=0, t=10, b=0))
+                st.plotly_chart(fig_eq, use_container_width=True)
+
         except Exception as e:
             st.error(f"Erreur simulation : {e}")
+            import traceback
+            st.code(traceback.format_exc())
 
 # ==========================================================
 # MAIN LOOP
