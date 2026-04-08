@@ -866,18 +866,18 @@ def bot_loop():
                 time.sleep(10)
 
         # ================= AUTO-TUNING =================
+        # DÉSACTIVÉ — accumuler des données live d'abord, réactiver via AUTO_TUNING_ENABLED=true
+        # ─────────────────────────────────────────────────────────────────────
         try:
-            # Trigger Auto-Tuner every 10 trades
-            if total_trades > 0 and total_trades - LAST_TUNE_TRADES >= 10:
+            AUTO_TUNING_ENABLED = os.getenv("AUTO_TUNING_ENABLED", "false").lower() == "true"
+            if AUTO_TUNING_ENABLED and total_trades > 0 and total_trades - LAST_TUNE_TRADES >= 10:
                 print("🔄 Lancement de l'Auto-Tuner...", flush=True)
-                # On utilise BTC par défaut comme indicateur de marché général
                 best_config = tuner.get_best_configuration(SYMBOLS, TIMEFRAME)
-                
+
                 if best_config:
                     new_strat = best_config['strategy']
                     p = best_config['params']
 
-                    # Only switch if meaningfully different
                     if new_strat != ACTIVE_STRATEGY or p['sl_multi'] != CURRENT_SL_MULTI or p['threshold'] != CURRENT_THRESHOLD:
                         ACTIVE_STRATEGY = new_strat
                         CURRENT_SL_MULTI = p['sl_multi']
