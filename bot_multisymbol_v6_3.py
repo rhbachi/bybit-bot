@@ -385,20 +385,28 @@ def get_base_currency(symbol):
 def get_available_balance():
     """
     Retourne la marge USDT réellement disponible pour de nouveaux ordres.
-    Utilise l'endpoint V5 Bybit qui tient compte des positions ouvertes et
-    de la marge gelée — plus fiable que fetch_balance() pour les comptes Unified.
+    Utilise totalAvailableBalance au niveau compte (pas availableToWithdraw au niveau
+    coin qui peut être 0 sur les comptes Unified en cross-margin).
     """
     try:
         resp = exchange.private_get_v5_account_wallet_balance({
             "accountType": "UNIFIED"
         })
-        coins = resp.get("result", {}).get("list", [{}])[0].get("coin", [])
-        for coin in coins:
+        account = resp.get("result", {}).get("list", [{}])[0]
+        # totalAvailableBalance = solde dispo pour nouveaux ordres (marge gelée déduite)
+        total_avail = account.get("totalAvailableBalance")
+        if total_avail is not None:
+            val = float(total_avail)
+            if val > 0:
+                return val
+        # Fallback coin-level : walletBalance USDT si totalAvailableBalance = 0
+        for coin in account.get("coin", []):
             if coin.get("coin") == "USDT":
-                # availableToWithdraw = solde libre après marge gelée
-                avail = coin.get("availableToWithdraw") or coin.get("availableToBorrow")
-                if avail is not None:
-                    return float(avail)
+                wb = coin.get("walletBalance")
+                if wb is not None:
+                    val = float(wb)
+                    if val > 0:
+                        return val
     except Exception:
         pass
 
@@ -407,12 +415,14 @@ def get_available_balance():
         resp = exchange.private_get_v5_account_wallet_balance({
             "accountType": "CONTRACT"
         })
-        coins = resp.get("result", {}).get("list", [{}])[0].get("coin", [])
-        for coin in coins:
+        account = resp.get("result", {}).get("list", [{}])[0]
+        for coin in account.get("coin", []):
             if coin.get("coin") == "USDT":
                 avail = coin.get("availableToWithdraw")
                 if avail is not None:
-                    return float(avail)
+                    val = float(avail)
+                    if val > 0:
+                        return val
     except Exception:
         pass
 
@@ -448,8 +458,9 @@ def open_trade(symbol, side, price, atr, score):
 
     # Solde réel disponible sur Bybit — utilisé comme capital effectif pour le sizing
     available = get_available_balance()
-    if available is None:
-        print(f"⚠️ {symbol} Impossible de récupérer le solde, utilisation de CAPITAL={CAPITAL}")
+    if available is None or available <= 0:
+        print(f"⚠️ {symbol} Solde indisponible (available={available}), utilisation de CAPITAL={CAPITAL}")
+        available = None
         effective_capital = CAPITAL
     else:
         # On utilise 90% du solde libre pour garder un tampon de frais
@@ -590,8 +601,9 @@ def open_trade_sniper(symbol, side, price, sl_distance, score):
 
     # Solde réel disponible sur Bybit — capital effectif pour le sizing
     available = get_available_balance()
-    if available is None:
-        print(f"⚠️ {symbol} Sniper: impossible de récupérer le solde, utilisation de CAPITAL={CAPITAL}")
+    if available is None or available <= 0:
+        print(f"⚠️ {symbol} Sniper: solde indisponible (available={available}), utilisation de CAPITAL={CAPITAL}")
+        available = None
         effective_capital = CAPITAL
     else:
         effective_capital = available * 0.90

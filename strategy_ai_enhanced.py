@@ -350,10 +350,11 @@ def detect_momentum_signal(df, trend):
 
     signals = []
 
-    # MACD Crossover
-    if last['macd'] > last['macd_signal'] and prev['macd'] <= prev['macd_signal']:
+    # MACD — position soutenue (pas juste le croisement exact qui coïncide rarement
+    # avec l'entrée OTE ; on vérifie que MACD est bien positif/négatif en ce moment)
+    if last['macd'] > last['macd_signal']:
         signals.append('macd_bullish')
-    elif last['macd'] < last['macd_signal'] and prev['macd'] >= prev['macd_signal']:
+    elif last['macd'] < last['macd_signal']:
         signals.append('macd_bearish')
 
     # RSI
@@ -477,8 +478,10 @@ def debug_check_signal(df, symbol=None):
     state = _get_sym_state(sym)
 
     # Étape 1 : Détecter un nouveau BIOS dans le sens de la tendance
+    # Ne pas écraser si on est déjà dans la zone OTE (sinon le BIOS se re-déclenche
+    # chaque bougie en tendance et reset ote_active indéfiniment)
     bios = detect_bios(df)
-    if bios and bios['direction'] == trend:
+    if bios and bios['direction'] == trend and not state['ote_active']:
         ote = detect_ote_zone(df, bios['direction'], bios['level'])
         if ote:
             state['bios_level']     = bios['level']
