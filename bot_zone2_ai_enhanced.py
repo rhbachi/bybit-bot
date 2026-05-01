@@ -569,14 +569,20 @@ def execute_entry(symbol, signal, df):
 
     try:
         if PAPER_TRADING:
+            print(f"📝 PAPER - Order simulé: {signal.upper()} {qty} @ {current_price:.2f}", flush=True)
             order_success = True
         else:
             order_side = "buy" if signal == "long" else "sell"
+            print(f"🚀 [{symbol}] Passage order: {order_side.upper()} {qty} @ {current_price:.2f}", flush=True)
             exchange.create_market_order(symbol, order_side, qty)
+            print(f"✅ [{symbol}] Order executé sur Bybit", flush=True)
             order_success = True
         
         if order_success:
+            print(f"🔒 [{symbol}] Placement SL/TP: SL={sl_price:.2f} TP={tp_price:.2f}", flush=True)
             success = place_sl_tp_orders(symbol, signal, qty, current_price, sl_price, tp_price)
+            if not success:
+                print(f"❌ [{symbol}] SL/TP ÉCHOUÉ - Position fermée par sécurité", flush=True)
             if success:
                 active_positions[symbol] = True
                 trades_state[symbol] = {
@@ -600,29 +606,9 @@ def execute_entry(symbol, signal, df):
                 print(msg, flush=True)
                 send_telegram(msg)
     except Exception as e:
-        enhanced_logger.log_error(f"Entry error {symbol}", e)
-
-def finalize_trade(symbol, trade, exit_price, reason):
-    """Finalise et log un trade terminé"""
-    global consecutive_losses, daily_pnl, total_trades, last_state_save_date
-    
-    if trade['side'] == 'long':
-        pnl_pct = (exit_price - trade['entry_price']) / trade['entry_price'] * 100
-        pnl_usdt = (exit_price - trade['entry_price']) * trade['qty']
-    else:
-        pnl_pct = (trade['entry_price'] - exit_price) / trade['entry_price'] * 100
-        pnl_usdt = (trade['entry_price'] - exit_price) * trade['qty']
-    
-    result = "WIN" if pnl_pct > 0 else "LOSS"
-    if result == "LOSS": consecutive_losses += 1
-    else: consecutive_losses = 0
-    
-    daily_pnl += pnl_usdt
-    total_trades += 1
-    
-    trade_data = {
-        'timestamp': datetime.now().isoformat(),
-        'bot_name': 'ZONE2_MULTI',
+        msg = f"❌ [{symbol}] ERREUR EXÉCUTION: {str(e)}"
+        print(msg, flush=True)
+        send_telegram(msg)
         'symbol': symbol,
         'side': trade['side'],
         'entry_price': trade['entry_price'],
